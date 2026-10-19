@@ -10,3 +10,5 @@ App personal de Dani (argentino en Barcelona). Web App de Google Apps Script ata
 - Probar la UI sin Apps Script: `python3 test/ui_smoke.py` (necesita Playwright; simula `google.script.run`).
 - Cierre: `previsualizarExtracto` (no escribe; propone coincidencias con pendientes de la misma cuenta, mismo monto, ±3 días) y `confirmarExtracto` (fusiona o inserta, deja `Conciliado` con la fecha de importación y `Validado`='Sí', o 'No' si no hay categoría).
 - Deploy: push a `main` → GitHub Action → clasp (ver README).
+- Editar movimiento (Movimientos → tocar fila): fecha + categoría/subcategoría vía `actualizarMovimiento(id, {fecha ISO, categoria, subcategoria})` (con LockService; solo toca lo que viene).
+- Inicio → solapa **Presupuesto** (simulación, no toca Transacciones ni totales): fijos detectados en el cliente (EUR, últimos 6 meses, ≥3 meses, ≤2 veces/mes; "fijo" si máx/mín ≤1,25), ingreso y variables editables. Ajustes en la pestaña `Simulador` del Sheet (`getSimulador` / `guardarSimulador`; claves especiales `_ingreso`, `_variables`). Test: `python3 test/ui_presupuesto.py`. La Proyección completa (saldo día a día, escenarios) sigue pendiente.

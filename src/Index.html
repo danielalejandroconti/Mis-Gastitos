@@ -84,6 +84,7 @@ a{color:inherit;text-decoration:none}
 /* ---------- movimientos ---------- */
 .seg{display:flex;background:#E8EBE3;border-radius:14px;padding:3px;gap:3px}
 .seg button{flex:1;height:40px;border:0;border-radius:11px;background:none;font:600 14px 'Figtree',sans-serif;color:var(--ink2)}
+.seg.s4 button{font-size:12.5px;padding:0 2px}
 .seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .search{height:44px;border:1px solid var(--ctl);border-radius:12px;padding:0 14px;font:400 15px 'Figtree',sans-serif;background:#fff;width:100%}
 .daylabel{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);padding:10px 4px 2px}
@@ -145,7 +146,7 @@ details.listos>summary::-webkit-details-marker{display:none}
     <button class="sl" data-go="mov"><span data-ic="list"></span><span>Movimientos</span><span class="b hidden" id="side-badge">0</span></button>
     <button class="sl" data-go="cierre"><span data-ic="upload"></span>Cierre de mes</button>
     <button class="sl" data-go="cuentas"><span data-ic="wallet"></span>Cuentas</button>
-    <div class="side-note"><b style="color:var(--ink)">Tus datos viven en tu Google Sheet.</b> <span id="side-sync">Sincronizado.</span><br><br>Reglas, presupuesto y tarjetas siguen en la <a href="<?= ScriptApp.getService().getUrl() ?>?v=old" style="color:var(--green);font-weight:700">versión anterior</a> hasta que las pasemos.</div>
+    <div class="side-note"><b style="color:var(--ink)">Tus datos viven en tu Google Sheet.</b> <span id="side-sync">Sincronizado.</span><br><br>Reglas, topes por categoría y tarjetas siguen en la <a href="<?= ScriptApp.getService().getUrl() ?>?v=old" style="color:var(--green);font-weight:700">versión anterior</a> hasta que las pasemos.</div>
   </nav>
 
   <div class="main">
@@ -420,8 +421,8 @@ function selector(etiqueta, fPrev, fNext, puedeNext){
     + '<button class="x" style="margin:0'+(puedeNext?'':';opacity:.3')+'" aria-label="Siguiente" '+(puedeNext?'':'disabled ')+'onclick="'+fNext+'">'+ic('chevR',22)+'</button></div>';
 }
 function htmlInicio(){
-  var h = '<div class="top"><div class="seg" style="flex:1;max-width:340px"><button class="'+(tabInicio==='mes'?'on':'')+'" onclick="setTabInicio(\'mes\')">Mes</button><button class="'+(tabInicio==='anio'?'on':'')+'" onclick="setTabInicio(\'anio\')">Año</button><button class="'+(tabInicio==='mam'?'on':'')+'" onclick="setTabInicio(\'mam\')">Mes a mes</button></div><div id="sync-slot"></div></div>';
-  return h + (tabInicio === 'anio' ? htmlAnio() : tabInicio === 'mam' ? htmlMesAMes() : htmlMes());
+  var h = '<div class="top"><div class="seg s4" style="flex:1;max-width:440px"><button class="'+(tabInicio==='mes'?'on':'')+'" onclick="setTabInicio(\'mes\')">Mes</button><button class="'+(tabInicio==='anio'?'on':'')+'" onclick="setTabInicio(\'anio\')">Año</button><button class="'+(tabInicio==='mam'?'on':'')+'" onclick="setTabInicio(\'mam\')">Mes a mes</button><button class="'+(tabInicio==='presu'?'on':'')+'" onclick="setTabInicio(\'presu\')">Presupuesto</button></div><div id="sync-slot"></div></div>';
+  return h + (tabInicio === 'anio' ? htmlAnio() : tabInicio === 'mam' ? htmlMesAMes() : tabInicio === 'presu' ? htmlPresupuesto() : htmlMes());
 }
 
 // Ingresos y gastos se ven igual: mismo bloque, distinto desglose.
@@ -623,6 +624,145 @@ function htmlMesAMes(){
   });
   t += '</tbody></table></div></div>';
   h += '<div class="muted" style="font-size:13px">Solo EUR, sin Ahorro/Inversión. Tocá un mes para ver su detalle. Más oscuro = más gasto en esa categoría.</div>' + t;
+  return h;
+}
+
+/* =====================  PRESUPUESTO (simulación, no toca tus datos)  ===================== */
+var sim = { cargado:false, cargando:false, guardado:{}, agregando:false, timer:null, det:null, detKey:'' };
+
+function normConcepto(c){
+  var s = String(c||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+  s = s.replace(/[0-9]+/g,' ').replace(/[^a-z ]+/g,' ');
+  var stop = {compra:1,tarj:1,tarjeta:1,pago:1,recibo:1,adeudo:1,transferencia:1,trf:1,de:1,del:1,la:1,el:1,en:1,con:1,movil:1,pos:1,cargo:1,domiciliacion:1,sepa:1,visa:1,eur:1};
+  return s.split(/\s+/).filter(function(x){ return x.length>1 && !stop[x]; }).slice(0,3).join(' ');
+}
+function mediana(a){ var b=a.slice().sort(function(x,y){return x-y;}), n=b.length; return n%2 ? b[(n-1)/2] : (b[n/2-1]+b[n/2])/2; }
+
+// Gastos que se repiten (EUR, últimos 6 meses): ≥3 meses distintos, vistos en el mes actual o el anterior, y no más de 2 veces por mes.
+// "fijo" = el monto mensual casi no cambia (máx/mín ≤ 1,25); "varia" = se repite pero el monto cambia.
+function detectarFijos(){
+  var H = hoyAM(), cur = H.a*12 + H.m, key = transacciones.length + '|' + cur;
+  if (sim.det && sim.detKey === key) return sim.det;
+  var g = {};
+  transacciones.forEach(function(t){
+    if (t.moneda !== 'EUR' || t.monto >= 0 || t.categoria === 'Ahorro/Inversión' || t.categoria === 'Ingresos') return;
+    var f = parseF(t.fecha); if (isNaN(f.getTime())) return;
+    var idx = f.getFullYear()*12 + f.getMonth(); if (idx < cur-5 || idx > cur) return;
+    var k = normConcepto(t.concepto); if (!k) return;
+    var o = g[k] || (g[k] = { clave:k, nombre:t.concepto, meses:{}, n:0 });
+    o.meses[idx] = (o.meses[idx]||0) - efectivo(t); o.n++;
+  });
+  var out = [];
+  Object.keys(g).forEach(function(k){
+    var o = g[k], idxs = Object.keys(o.meses).map(Number), nm = idxs.length;
+    if (nm < 3 || Math.max.apply(null, idxs) < cur-1 || o.n/nm > 2) return;
+    var comp = idxs.filter(function(i){ return i < cur; });
+    var vals = (comp.length >= 3 ? comp : idxs).map(function(i){ return o.meses[i]; });
+    var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+    if (mn <= 0) return;
+    out.push({ clave:k, nombre:o.nombre, monto:Math.round(mediana(vals)*100)/100, meses:nm, clase: mx/mn <= 1.25 ? 'fijo' : 'varia' });
+  });
+  out.sort(function(a,b){ return b.monto - a.monto; });
+  sim.det = out; sim.detKey = key;
+  return out;
+}
+function simItems(){
+  var out = [];
+  detectarFijos().forEach(function(d){
+    var g = sim.guardado[d.clave];
+    out.push({ clave:d.clave, nombre:(g&&g.nombre)||d.nombre, monto:g?g.monto:d.monto, activo:g?g.activo:d.clase==='fijo', clase:d.clase, meses:d.meses, manual:false });
+  });
+  Object.keys(sim.guardado).forEach(function(k){ var g = sim.guardado[k]; if (g.manual) out.push({ clave:k, nombre:g.nombre, monto:g.monto, activo:g.activo, clase:'manual', manual:true }); });
+  return out;
+}
+function promedio3(){
+  var H = hoyAM(), cache = {}, ing = 0, gas = 0, n = 0;
+  for (var k=1;k<=3;k++){
+    var idx = H.a*12 + H.m - k, a = Math.floor(idx/12), m = idx % 12;
+    var ms = cache[a] || (cache[a] = calcAnio(a));
+    if (ms[m].ing || ms[m].gas){ ing += ms[m].ing; gas += ms[m].gas; n++; }
+  }
+  return n ? { ing:ing/n, gas:gas/n, n:n } : { ing:0, gas:0, n:0 };
+}
+function simNums(){
+  var fijos = 0; simItems().forEach(function(x){ if (x.activo) fijos += x.monto; });
+  var base = 0; detectarFijos().forEach(function(d){ if (d.clase === 'fijo') base += d.monto; });
+  var p = promedio3();
+  var ing = sim.guardado._ingreso ? sim.guardado._ingreso.monto : Math.round(p.ing);
+  var vars = sim.guardado._variables ? sim.guardado._variables.monto : Math.max(0, Math.round(p.gas - base));
+  return { fijos:fijos, ing:ing, vars:vars, ahorro:ing - fijos - vars, p:p };
+}
+function signoEur(n){ return (n<0?'−':'') + entero(n) + ' €'; }
+function actualizarSimNums(){
+  var n = simNums(), a = document.getElementById('sim-ahorro'); if (!a) return;
+  document.getElementById('sim-fijos').textContent = '− ' + entero(n.fijos) + ' €';
+  a.textContent = signoEur(n.ahorro); a.style.color = n.ahorro < 0 ? 'var(--amber)' : 'var(--green)';
+  document.getElementById('sim-ahorro12').textContent = signoEur(n.ahorro*12);
+}
+function cargarSim(){
+  sim.cargando = true;
+  function fin(rows){
+    sim.guardado = {};
+    (rows||[]).forEach(function(r){ sim.guardado[r.clave] = { nombre:r.nombre, monto:r.monto, activo:r.activo, manual:r.manual }; });
+    sim.cargado = true; sim.cargando = false;
+    if (vista === 'inicio' && tabInicio === 'presu') render();
+  }
+  google.script.run.withSuccessHandler(fin).withFailureHandler(function(){ fin([]); toast('No pude leer tu simulación guardada'); }).getSimulador();
+}
+function simGuardarLuego(){ clearTimeout(sim.timer); sim.timer = setTimeout(simGuardar, 900); }
+function simGuardar(){
+  var rows = Object.keys(sim.guardado).map(function(k){ var g = sim.guardado[k]; return { clave:k, nombre:g.nombre, monto:g.monto, activo:g.activo, manual:!!g.manual }; });
+  google.script.run.withFailureHandler(function(){ toast('No se pudo guardar la simulación'); }).guardarSimulador(rows);
+}
+function simTocar(k){
+  if (!sim.guardado[k]){ var it = simItems().filter(function(x){ return x.clave===k; })[0]; sim.guardado[k] = { nombre:it.nombre, monto:it.monto, activo:it.activo, manual:false }; }
+  return sim.guardado[k];
+}
+function aNumero(v){ var n = Number(String(v).replace(',','.')); return isFinite(n) ? n : 0; }
+function simMonto(k, v){ simTocar(k).monto = aNumero(v); actualizarSimNums(); simGuardarLuego(); }
+function simToggle(k, on){ simTocar(k).activo = !!on; render(); simGuardarLuego(); }
+function simEspecial(k, nombre, v){ sim.guardado[k] = { nombre:nombre, monto:aNumero(v), activo:true, manual:false }; actualizarSimNums(); simGuardarLuego(); }
+function simQuitar(k){ delete sim.guardado[k]; render(); simGuardarLuego(); }
+function simAgregar(){
+  var n = document.getElementById('sim-nom').value.trim(), m = aNumero(document.getElementById('sim-mon').value);
+  if (!n || !m) { toast('Poné un nombre y un monto'); return; }
+  sim.guardado['m-' + uuid().slice(0,8)] = { nombre:n, monto:Math.abs(m), activo:true, manual:true };
+  sim.agregando = false; render(); simGuardarLuego();
+}
+function simRestablecer(){ sim.guardado = {}; render(); simGuardarLuego(); toast('Volvió a lo detectado'); }
+
+function filaSim(x){
+  var sub = x.manual ? 'Agregado por vos' : 'Aparece ' + x.meses + ' de 6 meses';
+  return '<div class="row" style="cursor:default;'+(x.activo?'':'opacity:.55')+'">'
+    + '<input type="checkbox" aria-label="Incluir '+esc(x.nombre)+'" '+(x.activo?'checked ':'')+'data-k="'+esc(x.clave)+'" onchange="simToggle(this.dataset.k,this.checked)" style="width:22px;height:22px;accent-color:var(--green);flex:0 0 auto">'
+    + '<div class="m"><div class="c">'+esc(x.nombre)+'</div><div class="s">'+sub+'</div></div>'
+    + '<input class="fld num" type="text" inputmode="decimal" aria-label="Monto de '+esc(x.nombre)+'" value="'+String(x.monto).replace('.',',')+'" data-k="'+esc(x.clave)+'" oninput="simMonto(this.dataset.k,this.value)" style="width:86px;height:40px;text-align:right;padding:0 10px">'
+    + (x.manual ? '<button class="x" aria-label="Quitar" data-k="'+esc(x.clave)+'" onclick="simQuitar(this.dataset.k)" style="border:0;background:none;width:36px;height:40px;color:var(--ink2)">'+ic('close',18)+'</button>' : '<span style="width:6px"></span>')
+    + '</div>';
+}
+function htmlPresupuesto(){
+  if (!sim.cargado) { if (!sim.cargando) cargarSim(); return '<div class="empty">Cargando tu simulación…</div>'; }
+  var items = simItems(), fijos = items.filter(function(x){ return x.clase==='fijo'; }), manual = items.filter(function(x){ return x.manual; }), varia = items.filter(function(x){ return x.clase==='varia'; });
+  var n = simNums();
+  var campo = function(id, k, nombre, v){ return '<input id="'+id+'" class="fld num" type="text" inputmode="decimal" value="'+String(v).replace('.',',')+'" oninput="simEspecial(\''+k+'\',\''+nombre+'\',this.value)" style="width:110px;height:40px;text-align:right;padding:0 10px">'; };
+  var h = '<div class="muted" style="font-size:13px">Es una simulación para jugar: no cambia tus movimientos ni ningún total de la app. Los fijos salen de lo que se repite en tus últimos 6 meses.</div>';
+  h += '<div class="card"><h2>Un mes típico</h2>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div style="font-weight:600">Ingreso mensual</div><div class="muted" style="font-size:12.5px">'+(n.p.n ? 'Promedio de tus últimos '+n.p.n+' meses: '+entero(n.p.ing)+' €' : 'Todavía no hay meses completos')+'</div></div>'+campo('sim-ing','_ingreso','Ingreso mensual',n.ing)+'</div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div style="font-weight:600">Gastos fijos</div><div class="muted" style="font-size:12.5px">Los tildados de abajo</div></div><div class="num" id="sim-fijos" style="font-weight:700;color:var(--amber)"></div></div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div style="font-weight:600">Otros gastos variables</div><div class="muted" style="font-size:12.5px">Súper, salidas, compras…</div></div>'+campo('sim-var','_variables','Otros gastos variables',n.vars)+'</div>'
+    + '<div style="border-top:1px solid var(--line-soft);padding-top:12px;display:flex;justify-content:space-between;align-items:baseline"><div style="font-weight:700">Te quedaría por mes</div><div class="t num" id="sim-ahorro" style="font-size:28px"></div></div>'
+    + '<div style="display:flex;justify-content:space-between" class="muted"><span>En 12 meses</span><span class="num" id="sim-ahorro12" style="font-weight:700"></span></div></div>';
+  h += '<div class="daylabel">Gastos fijos detectados</div>';
+  h += fijos.length ? '<div class="list">'+fijos.map(filaSim).join('')+'</div>' : '<div class="list"><div class="empty">No encontré gastos que se repitan con el mismo monto. Agregalos a mano abajo.</div></div>';
+  h += '<div class="daylabel">Tus gastos agregados</div>';
+  if (manual.length) h += '<div class="list">'+manual.map(filaSim).join('')+'</div>';
+  if (sim.agregando) h += '<div class="card"><div><span class="lbl">Nombre</span><input id="sim-nom" class="fld" type="text" placeholder="Ej: Gimnasio"></div><div><span class="lbl">Monto por mes (€)</span><input id="sim-mon" class="fld" type="text" inputmode="decimal" placeholder="0"></div><div style="display:flex;gap:10px"><button class="btn p" style="flex:1" onclick="simAgregar()">Agregar</button><button class="btn" onclick="sim.agregando=false;render()">Cancelar</button></div></div>';
+  else h += '<button class="btn w" onclick="sim.agregando=true;render();setTimeout(function(){var e=document.getElementById(\'sim-nom\');if(e)e.focus();},0)">+ Agregar un gasto</button>';
+  if (varia.length) {
+    h += '<div class="daylabel">También se repiten, pero el monto cambia</div><div class="muted" style="font-size:13px">Vienen destildados. Si querés contarlos, tildalos (usan el monto típico).</div><div class="list">'+varia.slice(0,12).map(filaSim).join('')+'</div>';
+  }
+  if (Object.keys(sim.guardado).length) h += '<button class="linkbtn" onclick="simRestablecer()">Volver a lo detectado</button>';
+  setTimeout(actualizarSimNums, 0);
   return h;
 }
 
@@ -890,7 +1030,7 @@ function htmlCuentas(){
     h += '</div>';
   }
   if (patrimonio.totalEUR) h += '<div class="card dashed" style="flex-direction:row;justify-content:space-between;border-radius:14px"><span class="muted" style="font-size:13px">Total referencial (aprox.)</span><span class="num" style="font-weight:700">≈ '+fmt(patrimonio.totalEUR,'EUR')+'</span></div>';
-  h += '<a class="linkbtn" style="display:flex;align-items:center;font-size:13px" href="<?= ScriptApp.getService().getUrl() ?>?v=old">Reglas, presupuesto y tarjetas: abrir la versión anterior</a>';
+  h += '<a class="linkbtn" style="display:flex;align-items:center;font-size:13px" href="<?= ScriptApp.getService().getUrl() ?>?v=old">Reglas, topes por categoría y tarjetas: abrir la versión anterior</a>';
   return h;
 }
 
@@ -1031,15 +1171,16 @@ var edit = null;
 function abrirEditar(id){
   var t = transacciones.filter(function(x){ return x.id===id; })[0]; if (!t) return;
   if (t._sync) { toast('Espera a que termine de guardarse'); return; }
-  edit = { id:id, categoria:t.categoria, subcategoria:t.subcategoria };
+  edit = { id:id, categoria:t.categoria, subcategoria:t.subcategoria, fecha:fechaAISO(t.fecha) };
   pintarEditar();
 }
 function pintarEditar(){
   var t = transacciones.filter(function(x){ return x.id===edit.id; })[0];
   var todas = categoriasLista();
   var h = '<div class="sheetbg" onclick="if(event.target===this)cerrarSheet()"><div class="sheet" role="dialog" aria-label="Editar movimiento">'
-    + '<div class="hd"><h2 class="t">Categoría</h2><button class="x" aria-label="Cerrar" onclick="cerrarSheet()">'+ic('close',22)+'</button></div>'
+    + '<div class="hd"><h2 class="t">Editar movimiento</h2><button class="x" aria-label="Cerrar" onclick="cerrarSheet()">'+ic('close',22)+'</button></div>'
     + '<div class="card"><div style="font-size:16px;font-weight:700">'+esc(t.concepto)+'</div><div class="muted" style="font-size:13px">'+esc(t.cuenta)+' · '+esc(t.fecha)+'</div><div class="t num" style="font-size:26px">'+fmt(t.monto,t.moneda,true)+'</div></div>'
+    + '<div><span class="lbl">Fecha</span><input id="e-fecha" class="fld" type="date" value="'+esc(edit.fecha)+'" max="2100-12-31"></div>'
     + '<div><span class="lbl">Categoría</span><select id="e-cat" class="fld"><option value="">Elegí una categoría…</option>'+todas.map(function(c){ return '<option'+(edit.categoria===c?' selected':'')+'>'+esc(c)+'</option>'; }).join('')+'</select></div>'
     + (edit.categoria ? '<div><span class="lbl">Subcategoría</span><select id="e-sub" class="fld"><option value="">Sin subcategoría</option>'+subcatsDe(edit.categoria).map(function(s){ return '<option'+(edit.subcategoria===s?' selected':'')+'>'+esc(s)+'</option>'; }).join('')+'</select></div>' : '')
     + '<div id="e-err"></div>'
@@ -1047,20 +1188,29 @@ function pintarEditar(){
     + (esPendiente(t) ? '<button class="btn" style="height:52px" onclick="guardarEdicion(true)">Guardar y confirmar</button>' : '')
     + '</div></div></div>';
   document.getElementById('overlay').innerHTML = h;
+  document.getElementById('e-fecha').addEventListener('change', function(e){ edit.fecha=e.target.value; });
   document.getElementById('e-cat').addEventListener('change', function(e){ edit.categoria=e.target.value; edit.subcategoria=''; pintarEditar(); });
   var s = document.getElementById('e-sub'); if (s) s.addEventListener('change', function(e){ edit.subcategoria=e.target.value; });
 }
 function guardarEdicion(confirmar){
-  if (!edit.categoria) { document.getElementById('e-err').innerHTML='<div class="err" role="alert">Elegí una categoría.</div>'; return; }
+  var fe = document.getElementById('e-fecha'); if (fe) edit.fecha = fe.value;
+  if (confirmar && !edit.categoria) { document.getElementById('e-err').innerHTML='<div class="err" role="alert">Elegí una categoría para confirmar.</div>'; return; }
+  if (!edit.fecha) { document.getElementById('e-err').innerHTML='<div class="err" role="alert">Elegí una fecha.</div>'; return; }
   var s = document.getElementById('e-sub'); if (s) edit.subcategoria = s.value;
-  var id = edit.id, cat = edit.categoria, sub = edit.subcategoria;
+  var id = edit.id, cat = edit.categoria, sub = edit.subcategoria, fecha = edit.fecha;
   var t = transacciones.filter(function(x){ return x.id===id; })[0];
-  var antes = { c:t.categoria, s:t.subcategoria };
-  t.categoria = cat; t.subcategoria = sub;
+  var antes = { c:t.categoria, s:t.subcategoria, f:t.fecha };
+  t.categoria = cat; t.subcategoria = sub; t.fecha = isoAfmt(fecha);
+  transacciones.sort(function(a,b){ return parseF(b.fecha)-parseF(a.fecha); });
   cerrarSheet(); render();
   google.script.run.withFailureHandler(function(){
-    t.categoria = antes.c; t.subcategoria = antes.s; toast('No se pudo guardar la categoría'); render();
-  }).withSuccessHandler(function(){ if (confirmar) confirmarIds([id]); }).actualizarCategoria(id, cat, sub);
+    t.categoria = antes.c; t.subcategoria = antes.s; t.fecha = antes.f;
+    transacciones.sort(function(a,b){ return parseF(b.fecha)-parseF(a.fecha); });
+    toast('No se pudo guardar el cambio'); render();
+  }).withSuccessHandler(function(r){
+    if (r && r.ok === false) { t.categoria = antes.c; t.subcategoria = antes.s; t.fecha = antes.f; transacciones.sort(function(a,b){ return parseF(b.fecha)-parseF(a.fecha); }); toast(r.error || 'No se pudo guardar el cambio'); render(); return; }
+    if (confirmar) confirmarIds([id]);
+  }).actualizarMovimiento(id, { fecha: fecha, categoria: cat, subcategoria: sub });
 }
 
 document.addEventListener('keydown', function(e){ if (e.key==='Escape') cerrarSheet(); });

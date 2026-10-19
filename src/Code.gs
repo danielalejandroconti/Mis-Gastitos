@@ -1308,6 +1308,73 @@ function getBootstrapLiviano() {
   };
 }
 
+/* ============================ EDITAR MOVIMIENTO (fecha + categoría) — app v2 ============================ */
+
+/**
+ * Cambia fecha y/o categoría/subcategoría de UN movimiento (por ID), con candado. Solo toca los campos
+ * que vienen en `campos` (fecha en formato ISO "2026-10-19", categoria, subcategoria). No toca Validado.
+ */
+function actualizarMovimiento(id, campos) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = sheet_('Transacciones');
+    const values = sh.getDataRange().getValues();
+    const headers = values[0];
+    const idCol = headers.indexOf('ID');
+    const col = (n) => headers.indexOf(n);
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][idCol]) !== String(id)) continue;
+      const fila = i + 1;
+      if (campos && campos.fecha && col('Fecha') !== -1) sh.getRange(fila, col('Fecha') + 1).setValue(parseFechaISOInput_(campos.fecha));
+      if (campos && campos.categoria !== undefined && col('Categoría') !== -1) sh.getRange(fila, col('Categoría') + 1).setValue(campos.categoria || '');
+      if (campos && campos.subcategoria !== undefined && col('Subcategoría') !== -1) sh.getRange(fila, col('Subcategoría') + 1).setValue(campos.subcategoria || '');
+      SpreadsheetApp.flush();
+      return { ok: true };
+    }
+    return { ok: false, error: 'No se encontró esa transacción.' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* ============================ SIMULADOR DE PRESUPUESTO (pestaña "Simulador") ============================ */
+// Es solo una simulación: guarda tus ajustes en su propia pestaña y NO toca Transacciones ni ningún total.
+// Filas: Clave | Nombre | Monto | Activo | Manual. Claves especiales: "_ingreso" y "_variables".
+
+function getSimulador() {
+  const hoja = ss_().getSheetByName('Simulador');
+  if (!hoja || hoja.getLastRow() < 2) return [];
+  return rowsToObjects_(hoja).map((r) => ({
+    clave: String(r['Clave'] || ''),
+    nombre: String(r['Nombre'] || ''),
+    monto: Number(r['Monto']) || 0,
+    activo: !(r['Activo'] === false || String(r['Activo']).toUpperCase() === 'FALSE'),
+    manual: (r['Manual'] === true || String(r['Manual']).toUpperCase() === 'TRUE'),
+  }));
+}
+
+/** Reemplaza todos los ajustes del simulador por `filas` ([{clave,nombre,monto,activo,manual}]). */
+function guardarSimulador(filas) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const ss = ss_();
+    let hoja = ss.getSheetByName('Simulador');
+    if (!hoja) { hoja = ss.insertSheet('Simulador'); hoja.appendRow(['Clave', 'Nombre', 'Monto', 'Activo', 'Manual']); }
+    const lim = Math.max(hoja.getLastRow(), 2);
+    hoja.getRange(2, 1, lim - 1, 5).clearContent();
+    const datos = (filas || []).slice(0, 300).map((f) => [
+      String(f.clave || ''), String(f.nombre || ''), Number(f.monto) || 0, f.activo !== false, !!f.manual,
+    ]);
+    if (datos.length) hoja.getRange(2, 1, datos.length, 5).setValues(datos);
+    SpreadsheetApp.flush();
+    return { ok: true, guardadas: datos.length };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /* ============================ CIERRE: EXTRACTO CON COINCIDENCIAS ============================ */
 
 function diasEntre_(a, b) { return Math.round((a.getTime() - b.getTime()) / 86400000); }
