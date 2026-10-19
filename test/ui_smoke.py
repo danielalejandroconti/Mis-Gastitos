@@ -18,7 +18,7 @@ MOCK="""
    if(name==='withSuccessHandler') return function(h){return runner(h,fail);};
    if(name==='withFailureHandler') return function(h){return runner(ok,h);};
    return function(){ var a=[].slice.call(arguments); window.__calls.push([name,a]); setTimeout(function(){
-      if(name==='getBootstrap') ok&&ok(boot); else if(name==='getTransacciones') ok&&ok(txs);
+      if(name==='getBootstrapLiviano') ok&&ok(boot); else if(name==='getTransacciones') ok&&ok(txs);
       else if(name==='addTransaccionManual') { if(window.__fail) fail&&fail({message:'x'}); else ok&&ok({ok:true,id:a[0].id}); }
       else ok&&ok({ok:true}); }, 150); };
  }});}

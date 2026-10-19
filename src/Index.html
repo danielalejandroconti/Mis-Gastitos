@@ -139,8 +139,8 @@ select.fld{appearance:none;background-image:linear-gradient(45deg,transparent 50
     <button class="sl" data-go="inicio"><span data-ic="home"></span>Inicio</button>
     <button class="sl" data-go="mov"><span data-ic="list"></span><span>Movimientos</span><span class="b hidden" id="side-badge">0</span></button>
     <a class="sl" href="<?= ScriptApp.getService().getUrl() ?>?v=old"><span data-ic="upload"></span>Cierre de mes</a>
-    <a class="sl" href="<?= ScriptApp.getService().getUrl() ?>?v=old"><span data-ic="wallet"></span>Cuentas</a>
-    <div class="side-note"><b style="color:var(--ink)">Tus datos viven en tu Google Sheet.</b> <span id="side-sync">Sincronizado.</span><br><br>Cierre, cuentas, acciones y reglas siguen en la versión anterior hasta que las pasemos.</div>
+    <button class="sl" data-go="cuentas"><span data-ic="wallet"></span>Cuentas</button>
+    <div class="side-note"><b style="color:var(--ink)">Tus datos viven en tu Google Sheet.</b> <span id="side-sync">Sincronizado.</span><br><br>Cierre de mes, acciones y reglas siguen en la versión anterior hasta que las pasemos.</div>
   </nav>
 
   <div class="main">
@@ -152,7 +152,7 @@ select.fld{appearance:none;background-image:linear-gradient(45deg,transparent 50
     <button class="bn" data-go="mov"><span class="ico"><span data-ic="list"></span><span class="badge hidden" id="bn-badge">0</span></span>Movimientos</button>
     <div class="fab"><button id="fab" aria-label="Nuevo movimiento"><span data-ic="plus" data-size="24" data-sw="2.2"></span></button></div>
     <a class="bn" href="<?= ScriptApp.getService().getUrl() ?>?v=old"><span class="ico" data-ic="upload"></span>Cierre</a>
-    <a class="bn" href="<?= ScriptApp.getService().getUrl() ?>?v=old"><span class="ico" data-ic="wallet"></span>Cuentas</a>
+    <button class="bn" data-go="cuentas"><span class="ico" data-ic="wallet"></span>Cuentas</button>
   </nav>
 </div>
 
@@ -247,26 +247,45 @@ function bootError(err){
   var el = document.getElementById('boot');
   el.innerHTML = '<div class="t" style="font-size:22px;color:var(--ink)">No se pudo conectar con tu Sheet</div><div style="max-width:420px">'+esc(err && err.message ? err.message : String(err))+'</div><button class="btn p" onclick="location.reload()">Reintentar</button>';
 }
+var cargando = false;
+function aplicarDatos(boot, txs){
+  cuentas = boot.cuentas || []; reglas = boot.reglas || []; patrimonio = boot.patrimonio || patrimonio;
+  var enCola = {}; cola.forEach(function(q){ enCola[q.tx.id]=true; });
+  var servidor = txs.filter(function(t){ return !enCola[t.id]; });
+  transacciones = cola.map(function(q){ return q.tx; }).concat(servidor);
+  transacciones.sort(function(a,b){ return parseF(b.fecha)-parseF(a.fecha); });
+  document.getElementById('boot').classList.add('hidden');
+  document.getElementById('app').hidden = false;
+}
 function cargar(silencioso){
-  if (!silencioso) bootMsg('Cargando tus datos…');
-  google.script.run.withFailureHandler(function(e){ if(!silencioso) bootError(e); else setSync('err'); })
-    .withSuccessHandler(function(data){
-      if (!data) { bootError({message:'El servidor devolvió una respuesta vacía. Recargá la página.'}); return; }
-      cuentas = data.cuentas || []; reglas = data.reglas || []; patrimonio = data.patrimonio || patrimonio;
-      if (!silencioso) bootMsg('Cargando tus movimientos…');
-      google.script.run.withFailureHandler(function(e){ if(!silencioso) bootError(e); else setSync('err'); })
-        .withSuccessHandler(function(txs){
-          if (!txs) { bootError({message:'No llegaron los movimientos (respuesta vacía). Recargá la página.'}); return; }
-          // conservamos lo que todavía no confirmó el servidor
-          var enCola = {}; cola.forEach(function(q){ enCola[q.tx.id]=true; });
-          var servidor = txs.filter(function(t){ return !enCola[t.id]; });
-          transacciones = cola.map(function(q){ return q.tx; }).concat(servidor);
-          transacciones.sort(function(a,b){ return parseF(b.fecha)-parseF(a.fecha); });
-          document.getElementById('boot').classList.add('hidden');
-          document.getElementById('app').hidden = false;
-          setSync('ok'); render();
-        }).getTransacciones();
-    }).getBootstrap();
+  var hayCache = false;
+  if (!silencioso) {
+    var cache = null; try { cache = JSON.parse(lsGet('mg-cache') || 'null'); } catch(e){}
+    if (cache && cache.boot && cache.tx) { aplicarDatos(cache.boot, cache.tx); hayCache = true; }
+    else bootMsg('Cargando tus datos…');
+  }
+  cargando = true; setSync('ok'); if (hayCache) render();
+  var res = {}, fallo = false;
+  function error(e){
+    if (fallo) return; fallo = true; cargando = false;
+    if (!silencioso && !hayCache) bootError(e); else { setSync('err'); render(); }
+  }
+  function listo(){
+    if (!res.boot || !res.tx) return;
+    cargando = false;
+    aplicarDatos(res.boot, res.tx);
+    lsSet('mg-cache', JSON.stringify({ boot:{ cuentas:res.boot.cuentas, reglas:res.boot.reglas, patrimonio:res.boot.patrimonio }, tx:res.tx }));
+    setSync('ok'); render();
+  }
+  // las dos llamadas salen a la vez (antes iban una después de la otra)
+  google.script.run.withFailureHandler(error).withSuccessHandler(function(d){
+    if (!d) { error({message:'El servidor devolvió una respuesta vacía. Recargá la página.'}); return; }
+    res.boot = d; listo();
+  }).getBootstrapLiviano();
+  google.script.run.withFailureHandler(error).withSuccessHandler(function(t){
+    if (!t) { error({message:'No llegaron los movimientos (respuesta vacía). Recargá la página.'}); return; }
+    res.tx = t; listo();
+  }).getTransacciones();
 }
 
 /* ---------- sincronización de altas (optimista) ---------- */
@@ -281,6 +300,7 @@ function setSync(estado){
 function syncHtml(estado){
   var enviando = cola.filter(function(q){ return !q.error; }).length;
   var fallidas = cola.filter(function(q){ return q.error; }).length;
+  if (cargando && !fallidas) return '<div class="sync">Actualizando…</div>';
   if (fallidas) return '<div class="sync err">'+fallidas+' sin guardar <button onclick="reintentarCola()">Reintentar</button></div>';
   if (enviando) return '<div class="sync">Sincronizando…</div>';
   if (estado==='err') return '<div class="sync err">Sin conexión <button onclick="cargar(true)">Reintentar</button></div>';
@@ -331,7 +351,7 @@ function render(){
   var pend = transacciones.filter(esPendiente).length;
   ['bn-badge','side-badge'].forEach(function(id){ var el=document.getElementById(id); el.textContent=pend; el.classList.toggle('hidden', !pend); });
   var c = document.getElementById('content');
-  c.innerHTML = vista === 'mov' ? htmlMovimientos() : htmlInicio();
+  c.innerHTML = vista === 'mov' ? htmlMovimientos() : vista === 'cuentas' ? htmlCuentas() : htmlInicio();
   var s = document.getElementById('sync-slot'); if (s) s.innerHTML = syncHtml('ok');
   var q = document.getElementById('q'); if (q) q.addEventListener('input', function(){ textoBusqueda = q.value; renderLista(); });
 }
@@ -383,6 +403,37 @@ function htmlInicio(){
   });
   if (patrimonio.totalEUR) h += '<div class="card dashed" style="padding:10px 12px;flex-direction:row;justify-content:space-between;border-radius:12px"><span class="muted" style="font-size:13px">Total referencial</span><span class="num" style="font-weight:700">≈ '+fmt(patrimonio.totalEUR,'EUR')+'</span></div>';
   h += '</div></div>';
+  return h;
+}
+
+/* =====================  CUENTAS  ===================== */
+function htmlCuentas(){
+  var saldos = {};
+  transacciones.forEach(function(t){ saldos[t.cuenta] = (saldos[t.cuenta]||0) + t.monto; });
+  var grupos = {}, orden = [];
+  cuentas.forEach(function(c){
+    var g = c['Grupo'] || c['Moneda'] || 'Otras';
+    if (!grupos[g]) { grupos[g] = { moneda:c['Moneda']||g, items:[], total:0 }; orden.push(g); }
+    var sd = saldos[c['Nombre']] || 0;
+    grupos[g].items.push({ nombre:c['Nombre'], saldo:sd, moneda:c['Moneda']||g, tipo:c['Tipo']||'' });
+    grupos[g].total += sd;
+  });
+  var h = '<div class="top"><h1 class="t">Cuentas</h1><div id="sync-slot"></div></div>';
+  orden.forEach(function(g){
+    var G = grupos[g];
+    h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="eyebrow">'+esc(g)+'</div><div class="t num" style="font-size:22px">'+fmt(G.total,G.moneda)+'</div></div>';
+    G.items.forEach(function(it){
+      h += '<div class="pat"><span>'+esc(it.nombre)+(it.tipo?' <span class="muted" style="font-size:12.5px">· '+esc(it.tipo)+'</span>':'')+'</span><span class="num" style="font-weight:700">'+fmt(it.saldo,it.moneda)+'</span></div>';
+    });
+    h += '</div>';
+  });
+  var inv = (patrimonio.grupos||[]).filter(function(x){ return x.grupo==='Acciones' || x.grupo==='Crypto'; });
+  if (inv.length) {
+    h += '<div class="card"><div class="eyebrow">Inversiones</div>';
+    inv.forEach(function(x){ h += '<div class="pat"><span>'+esc(x.grupo)+'</span><span class="num" style="font-weight:700">'+fmt(x.total,'EUR')+'</span></div>'; });
+    h += '</div>';
+  }
+  if (patrimonio.totalEUR) h += '<div class="card dashed" style="flex-direction:row;justify-content:space-between;border-radius:14px"><span class="muted" style="font-size:13px">Total referencial (aprox.)</span><span class="num" style="font-weight:700">≈ '+fmt(patrimonio.totalEUR,'EUR')+'</span></div>';
   return h;
 }
 

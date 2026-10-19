@@ -1296,3 +1296,13 @@ function getBootstrap() {
     perfilesImportacion: getPerfilesImportacion(),
   };
 }
+
+// Versión liviana de getBootstrap() para la app nueva: solo lo que pinta Inicio/Cuentas.
+// (getBootstrap() calculaba las posiciones de acciones/cripto dos veces: una directa y otra dentro de getPatrimonio.)
+function getBootstrapLiviano() {
+  return {
+    cuentas: getCuentas(),
+    reglas: getReglas(),
+    patrimonio: getPatrimonio(),
+  };
+}
