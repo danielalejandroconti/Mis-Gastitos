@@ -32,21 +32,17 @@ jobs:
           test -n "$CLASPRC_JSON" || { echo "Falta el secreto CLASPRC_JSON (ver README)"; exit 1; }
           test -n "$SCRIPT_ID" || { echo "Falta el secreto SCRIPT_ID (ver README)"; exit 1; }
           printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          SCRIPT_ID="$(printf '%s' "$SCRIPT_ID" | tr -d '[:space:]')"
+          echo "SCRIPT_ID_LIMPIO=$SCRIPT_ID" >> "$GITHUB_ENV"
           printf '{"scriptId":"%s","rootDir":"src"}' "$SCRIPT_ID" > .clasp.json
 
       # Traemos el appsscript.json real del proyecto (zona horaria, permisos, config de la web app)
       # para no pisarlo con uno inventado. Si el repo ya tiene uno propio en src/, se respeta.
-      - name: Diagnóstico del ID
-        env:
-          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
-        run: |
-          echo "::notice::SCRIPT_ID largo=${#SCRIPT_ID} formato_ok=$([[ "$SCRIPT_ID" =~ ^[A-Za-z0-9_-]+$ ]] && echo si || echo NO) empieza=${SCRIPT_ID:0:4} termina=${SCRIPT_ID: -4}"
-
       - name: Manifiesto actual
         run: |
           if [ ! -f src/appsscript.json ]; then
             mkdir /tmp/remoto && cd /tmp/remoto
-            printf '{"scriptId":"%s"}' "${{ secrets.SCRIPT_ID }}" > .clasp.json
+            printf '{"scriptId":"%s"}' "$SCRIPT_ID_LIMPIO" > .clasp.json
             clasp pull > /tmp/pull.log 2>&1 || { echo "::error::clasp pull falló: $(tr '\n' ' ' < /tmp/pull.log | head -c 900)"; exit 1; }
             ls -la >> /tmp/pull.log
             cp appsscript.json "$GITHUB_WORKSPACE/src/appsscript.json"
@@ -60,5 +56,6 @@ jobs:
         env:
           DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
         run: |
+          DEPLOYMENT_ID="$(printf '%s' "$DEPLOYMENT_ID" | tr -d '[:space:]')"
           test -n "$DEPLOYMENT_ID" || { echo "Falta el secreto DEPLOYMENT_ID (ver README)"; exit 1; }
           clasp deploy -i "$DEPLOYMENT_ID" -d "GitHub ${GITHUB_SHA::7}"
