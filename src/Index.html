@@ -172,7 +172,9 @@ const ICONS = {
   upload:'<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>',
   wallet:'<path d="M3 7a2 2 0 012-2h13v4"/><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M16 14h2"/>',
   check:'<path d="M5 12l5 5 9-10"/>',
-  close:'<path d="M6 6l12 12M18 6L6 18"/>'
+  close:'<path d="M6 6l12 12M18 6L6 18"/>',
+  chevL:'<path d="M15 6l-6 6 6 6"/>',
+  chevR:'<path d="M9 6l6 6-6 6"/>'
 };
 function ic(name, size, sw){
   return '<svg viewBox="0 0 24 24" width="'+(size||22)+'" height="'+(size||22)+'" fill="none" stroke="currentColor" stroke-width="'+(sw||1.8)+'" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+ICONS[name]+'</svg>';
@@ -250,6 +252,7 @@ function bootError(err){
 var cargando = false;
 function aplicarDatos(boot, txs){
   cuentas = boot.cuentas || []; reglas = boot.reglas || []; patrimonio = boot.patrimonio || patrimonio;
+  if (boot.metaAhorro != null) metaAhorro = Number(boot.metaAhorro) || 0;
   var enCola = {}; cola.forEach(function(q){ enCola[q.tx.id]=true; });
   var servidor = txs.filter(function(t){ return !enCola[t.id]; });
   transacciones = cola.map(function(q){ return q.tx; }).concat(servidor);
@@ -274,7 +277,7 @@ function cargar(silencioso){
     if (!res.boot || !res.tx) return;
     cargando = false;
     aplicarDatos(res.boot, res.tx);
-    lsSet('mg-cache', JSON.stringify({ boot:{ cuentas:res.boot.cuentas, reglas:res.boot.reglas, patrimonio:res.boot.patrimonio }, tx:res.tx }));
+    lsSet('mg-cache', JSON.stringify({ boot:{ cuentas:res.boot.cuentas, reglas:res.boot.reglas, patrimonio:res.boot.patrimonio, metaAhorro:res.boot.metaAhorro }, tx:res.tx }));
     setSync('ok'); render();
   }
   // las dos llamadas salen a la vez (antes iban una después de la otra)
@@ -356,45 +359,94 @@ function render(){
   var q = document.getElementById('q'); if (q) q.addEventListener('input', function(){ textoBusqueda = q.value; renderLista(); });
 }
 
-/* =====================  INICIO  ===================== */
-function gastoDelMes(anio, mes){
-  var porCat = {}, total = 0, ars = 0;
+/* =====================  INICIO (Mes | Año)  ===================== */
+var tabInicio = 'mes';
+var mesVer = { a: new Date().getFullYear(), m: new Date().getMonth() };
+var anioVer = new Date().getFullYear();
+var selMes = null;
+var metaAhorro = 3000;
+var C_ING = '#0E6B4D', C_GAS = '#A8480A';
+
+// Lo que realmente gastó/ganó Dani: si hay "Mi parte", el gasto cuenta solo su parte.
+function efectivo(t){ return (t.miParte != null && t.monto < 0) ? -Math.abs(t.miParte) : t.monto; }
+
+// Misma lógica que la versión anterior: solo EUR, sin Ahorro/Inversión, ingresos = categoría "Ingresos",
+// gasto de cada categoría = neto del mes (los reembolsos de esa categoría restan).
+function calcAnio(anio){
+  var meses = []; for (var i=0;i<12;i++) meses.push({ ing:0, gas:0, neto:{}, porCat:{} });
   transacciones.forEach(function(t){
-    var d = parseF(t.fecha);
-    if (d.getFullYear()!==anio || d.getMonth()!==mes || t.monto >= 0) return;
-    if (t.categoria === 'Ahorro/Inversión') return;
-    var m = t.miParte != null ? -Math.abs(t.miParte) : t.monto;   // presupuesto usa "Mi parte"
-    if (t.moneda === 'EUR') { total += -m; var k=t.categoria||'Sin categoría'; porCat[k]=(porCat[k]||0)+(-m); }
-    else if (t.moneda === 'ARS') ars += -m;
+    if (t.moneda !== 'EUR' || t.categoria === 'Ahorro/Inversión') return;
+    var f = parseF(t.fecha); if (isNaN(f.getTime()) || f.getFullYear() !== anio) return;
+    var m = f.getMonth(), v = efectivo(t);
+    if (t.categoria === 'Ingresos') meses[m].ing += v;
+    else { var c = t.categoria || 'Sin categoría'; meses[m].neto[c] = (meses[m].neto[c]||0) + v; }
   });
-  return { total:total, porCat:porCat, ars:ars };
+  meses.forEach(function(x){
+    Object.keys(x.neto).forEach(function(c){ if (x.neto[c] < 0) { x.porCat[c] = -x.neto[c]; x.gas += -x.neto[c]; } });
+  });
+  return meses;
+}
+function arsDelMes(a, m){
+  var tot = 0;
+  transacciones.forEach(function(t){
+    if (t.moneda !== 'ARS' || t.monto >= 0 || t.categoria === 'Ahorro/Inversión') return;
+    var d = parseF(t.fecha); if (d.getFullYear()===a && d.getMonth()===m) tot += -efectivo(t);
+  });
+  return tot;
+}
+function hoyAM(){ var h = new Date(); return { a:h.getFullYear(), m:h.getMonth() }; }
+function cambiarMes(d){
+  var h = hoyAM(), n = mesVer.m + d, a = mesVer.a;
+  if (n < 0) { n = 11; a--; } if (n > 11) { n = 0; a++; }
+  if (a > h.a || (a === h.a && n > h.m)) return;
+  mesVer = { a:a, m:n }; render();
+}
+function cambiarAnio(d){ var n = anioVer + d; if (n > hoyAM().a) return; anioVer = n; selMes = null; render(); }
+function setTabInicio(t){ tabInicio = t; render(); }
+function verMes(a, m){ mesVer = { a:a, m:m }; tabInicio = 'mes'; render(); window.scrollTo(0,0); }
+function fmtK(n){ var a = Math.abs(n); return a >= 1000 ? (Math.round(a/100)/10).toString().replace('.',',')+'k' : String(Math.round(a)); }
+
+function selector(etiqueta, fPrev, fNext, puedeNext){
+  return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">'
+    + '<button class="x" style="margin:0" aria-label="Anterior" onclick="'+fPrev+'">'+ic('chevL',22)+'</button>'
+    + '<h1 class="t" style="margin:0;font-size:26px;text-align:center">'+etiqueta+'</h1>'
+    + '<button class="x" style="margin:0'+(puedeNext?'':';opacity:.3')+'" aria-label="Siguiente" '+(puedeNext?'':'disabled ')+'onclick="'+fNext+'">'+ic('chevR',22)+'</button></div>';
 }
 function htmlInicio(){
-  var hoy = new Date(), g = gastoDelMes(hoy.getFullYear(), hoy.getMonth());
-  var cats = Object.keys(g.porCat).sort(function(a,b){ return g.porCat[b]-g.porCat[a]; });
-  var top = cats.slice(0,4), max = top.length ? g.porCat[top[0]] : 1;
+  var h = '<div class="top"><div class="seg" style="flex:1;max-width:260px"><button class="'+(tabInicio==='mes'?'on':'')+'" onclick="setTabInicio(\'mes\')">Mes</button><button class="'+(tabInicio==='anio'?'on':'')+'" onclick="setTabInicio(\'anio\')">Año</button></div><div id="sync-slot"></div></div>';
+  return h + (tabInicio === 'anio' ? htmlAnio() : htmlMes());
+}
+
+function htmlMes(){
+  var H = hoyAM(), A = mesVer.a, M = mesVer.m;
+  var mm = calcAnio(A)[M];
+  var cats = Object.keys(mm.porCat).sort(function(a,b){ return mm.porCat[b]-mm.porCat[a]; });
+  var top = cats.slice(0,4), max = top.length ? mm.porCat[top[0]] : 1;
+  var ars = arsDelMes(A, M), ahorro = mm.ing - mm.gas;
   var pend = transacciones.filter(esPendiente);
   var sinCat = pend.filter(faltaCat).length;
-  var h = '<div class="top"><div><div class="eyebrow">Hola</div><h1 class="t">'+MESES_LARGO[hoy.getMonth()]+'</h1></div><div id="sync-slot"></div></div>';
+  var esActual = (A === H.a && M === H.m);
+  var h = selector(MESES_LARGO[M] + (A !== H.a ? ' ' + A : ''), 'cambiarMes(-1)', 'cambiarMes(1)', !esActual);
 
-  h += '<div class="card"><div class="eyebrow">Gastado este mes</div><div class="t big num">'+fmt(g.total,'EUR')+'</div>';
-  if (g.ars) h += '<div class="muted" style="font-size:13px">y '+fmt(g.ars,'ARS')+' en cuentas en pesos</div>';
+  h += '<div class="card"><div class="eyebrow">Gastado'+(esActual?' este mes':'')+'</div><div class="t big num">'+fmt(mm.gas,'EUR')+'</div>';
+  if (mm.ing || mm.gas) h += '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:14px"><span><span class="muted">Ingresos</span> <b class="num" style="color:var(--green)">'+fmt(mm.ing,'EUR')+'</b></span><span><span class="muted">'+(ahorro>=0?'Ahorro':'Déficit')+'</span> <b class="num">'+fmt(ahorro,'EUR')+'</b></span></div>';
+  if (ars) h += '<div class="muted" style="font-size:13px">y '+fmt(ars,'ARS')+' en cuentas en pesos</div>';
   if (top.length) {
     h += '<div style="display:flex;flex-direction:column;gap:12px;margin-top:4px">';
     top.forEach(function(k){
-      h += '<div class="catrow"><div class="h"><span>'+esc(k)+'</span><span class="num">'+fmt(g.porCat[k],'EUR')+'</span></div><div class="bar"><i style="width:'+Math.max(4,Math.round(g.porCat[k]/max*100))+'%"></i></div></div>';
+      h += '<div class="catrow"><div class="h"><span>'+esc(k)+'</span><span class="num">'+fmt(mm.porCat[k],'EUR')+'</span></div><div class="bar"><i style="width:'+Math.max(4,Math.round(mm.porCat[k]/max*100))+'%"></i></div></div>';
     });
     h += '</div>';
-  } else h += '<div class="muted" style="font-size:14px">Todavía no hay gastos cargados este mes.</div>';
+  } else h += '<div class="muted" style="font-size:14px">No hay gastos cargados en este mes.</div>';
   h += '</div>';
 
   h += '<div class="grid2">';
-  h += '<button class="card" data-go="mov" style="text-align:left;color:inherit;cursor:pointer;font-family:inherit"><div class="row0" style="display:flex;justify-content:space-between;align-items:center"><div class="eyebrow">Pendientes</div>'+(pend.length?'<span class="chip a">'+pend.length+'</span>':'<span class="chip g">Todo al día</span>')+'</div>'
+  h += '<button class="card" data-go="mov" style="text-align:left;color:inherit;cursor:pointer;font-family:inherit"><div style="display:flex;justify-content:space-between;align-items:center"><div class="eyebrow">Pendientes</div>'+(pend.length?'<span class="chip a">'+pend.length+'</span>':'<span class="chip g">Todo al día</span>')+'</div>'
     + (pend.length ? '<div style="font-size:15px;font-weight:600">'+pend.length+' movimiento'+(pend.length===1?'':'s')+' para confirmar'+(sinCat?' · <span style="color:var(--amber)">'+sinCat+' sin categoría</span>':'')+'</div><div class="linkbtn" style="min-height:0">Revisar</div>'
                 : '<div class="muted" style="font-size:14px">No hay nada esperando confirmación.</div>')
     + '</button>';
 
-  h += '<div class="card"><div class="eyebrow">Patrimonio</div>';
+  h += '<div class="card"><div class="eyebrow">Patrimonio hoy</div>';
   var grupos = (patrimonio.grupos||[]).filter(function(x){ return x.total; });
   var col = {EUR:'#0E6B4D',ARS:'#1F4F99',USD:'#566159',Acciones:'#566159',Crypto:'#566159'};
   grupos.forEach(function(x){
@@ -404,6 +456,119 @@ function htmlInicio(){
   if (patrimonio.totalEUR) h += '<div class="card dashed" style="padding:10px 12px;flex-direction:row;justify-content:space-between;border-radius:12px"><span class="muted" style="font-size:13px">Total referencial</span><span class="num" style="font-weight:700">≈ '+fmt(patrimonio.totalEUR,'EUR')+'</span></div>';
   h += '</div></div>';
   return h;
+}
+
+/* ---------- Año ---------- */
+function barPath(x, y, w, hh, r){
+  if (hh <= 0) return '';
+  r = Math.min(r, hh, w/2);
+  return 'M'+x+' '+(y+hh)+'V'+(y+r)+'Q'+x+' '+y+' '+(x+r)+' '+y+'H'+(x+w-r)+'Q'+(x+w)+' '+y+' '+(x+w)+' '+(y+r)+'V'+(y+hh)+'Z';
+}
+function niceMax(v){ if (v <= 0) return 100; var e = Math.pow(10, Math.floor(Math.log10(v))); var f = v/e; var n = f<=1?1:f<=2?2:f<=2.5?2.5:f<=5?5:10; return n*e; }
+
+function svgColumnas(meses, hasta){
+  var W=340, Ht=170, L=30, B=20, T=8, R=4, pw = W-L-R, ph = Ht-B-T;
+  var max = niceMax(Math.max.apply(null, meses.map(function(x){ return Math.max(x.ing, x.gas); }).concat([1])));
+  var slot = pw/12, bw = 9;
+  var s = '<svg viewBox="0 0 '+W+' '+Ht+'" width="100%" role="img" aria-label="Ingresos y gastos por mes" style="display:block">';
+  [0,0.5,1].forEach(function(f){
+    var y = T + ph - f*ph;
+    s += '<line x1="'+L+'" x2="'+(W-R)+'" y1="'+y+'" y2="'+y+'" stroke="#E3E6DE" stroke-width="1"/><text x="'+(L-5)+'" y="'+(y+3.5)+'" text-anchor="end" font-size="9.5" fill="#566159">'+fmtK(max*f)+'</text>';
+  });
+  meses.forEach(function(x, i){
+    var cx = L + slot*i + slot/2, on = (selMes === i);
+    if (on) s += '<rect x="'+(L+slot*i+1)+'" y="'+T+'" width="'+(slot-2)+'" height="'+ph+'" rx="6" fill="#F3F4EF"/>';
+    if (i <= hasta) {
+      var hi = x.ing/max*ph, hg = x.gas/max*ph;
+      s += '<path d="'+barPath(cx-bw-1, T+ph-hi, bw, hi, 4)+'" fill="'+C_ING+'"/>';
+      s += '<path d="'+barPath(cx+1, T+ph-hg, bw, hg, 4)+'" fill="'+C_GAS+'"/>';
+    }
+    s += '<text x="'+cx+'" y="'+(Ht-5)+'" text-anchor="middle" font-size="10" fill="'+(on?'#17211C':'#566159')+'" font-weight="'+(on?'700':'500')+'">'+MESES[i].charAt(0).toUpperCase()+'</text>';
+    s += '<rect data-m="'+i+'" x="'+(L+slot*i)+'" y="0" width="'+slot+'" height="'+Ht+'" fill="transparent" style="cursor:pointer"/>';
+  });
+  return s + '</svg>';
+}
+function svgAcumulado(meses, hasta){
+  var W=340, Ht=110, L=30, R=34, T=10, B=18, pw=W-L-R, ph=Ht-T-B;
+  var vals = [], acc = 0;
+  for (var i=0;i<=hasta;i++){ acc += meses[i].ing - meses[i].gas; vals.push(acc); }
+  if (!vals.length) return '';
+  var lo = Math.min(0, Math.min.apply(null, vals)), hi = Math.max(1, Math.max.apply(null, vals)), rg = (hi-lo)||1;
+  var step = pw/11;
+  function X(i){ return L + step*i; } function Y(v){ return T + ph - (v-lo)/rg*ph; }
+  var s = '<svg viewBox="0 0 '+W+' '+Ht+'" width="100%" role="img" aria-label="Ahorro acumulado del año" style="display:block">';
+  s += '<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(0)+'" y2="'+Y(0)+'" stroke="#C9CEC4" stroke-width="1"/><text x="'+(L-5)+'" y="'+(Y(0)+3.5)+'" text-anchor="end" font-size="9.5" fill="#566159">0</text>';
+  s += '<polyline fill="none" stroke="'+C_ING+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" points="'+vals.map(function(v,i){ return X(i)+','+Y(v); }).join(' ')+'"/>';
+  var li = vals.length-1;
+  s += '<circle cx="'+X(li)+'" cy="'+Y(vals[li])+'" r="4.5" fill="'+C_ING+'" stroke="#fff" stroke-width="2"/>';
+  s += '<text x="'+Math.min(X(li)+8, W-2)+'" y="'+(Y(vals[li])+3.5)+'" font-size="11" font-weight="700" fill="#17211C" text-anchor="'+(X(li)+8>W-40?'end':'start')+'">'+(X(li)+8>W-40?'':'')+fmtK(vals[li])+'</text>';
+  for (var k=0;k<12;k++) s += '<text x="'+X(k)+'" y="'+(Ht-4)+'" text-anchor="middle" font-size="10" fill="#566159">'+MESES[k].charAt(0).toUpperCase()+'</text>';
+  return s + '</svg>';
+}
+function htmlAnio(){
+  var H = hoyAM(), A = anioVer, meses = calcAnio(A);
+  var hasta = (A === H.a) ? H.m : 11;
+  var ing = 0, gas = 0, cat = {};
+  for (var i=0;i<=hasta;i++){ ing += meses[i].ing; gas += meses[i].gas; Object.keys(meses[i].porCat).forEach(function(c){ cat[c] = (cat[c]||0) + meses[i].porCat[c]; }); }
+  var ahorro = ing - gas, tasa = ing > 0 ? Math.round(ahorro/ing*100) : null;
+  var pct = metaAhorro > 0 ? Math.min(100, Math.max(0, ahorro/metaAhorro*100)) : 0;
+  var restan = (A === H.a) ? 11 - H.m : 0, falta = metaAhorro - ahorro;
+  var h = selector(String(A), 'cambiarAnio(-1)', 'cambiarAnio(1)', A < H.a);
+
+  h += '<div class="card"><div class="eyebrow">Ahorrado en el año</div><div class="t big num" style="color:'+(ahorro>=0?'var(--green)':'var(--amber)')+'">'+fmt(ahorro,'EUR')+'</div>'
+     + '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:14px"><span><span class="muted">Ingresos</span> <b class="num">'+fmt(ing,'EUR')+'</b></span><span><span class="muted">Gastos</span> <b class="num">'+fmt(gas,'EUR')+'</b></span>'+(tasa!==null?'<span><span class="muted">Tasa de ahorro</span> <b class="num">'+tasa+'%</b></span>':'')+'</span></div>'
+     + '<div><div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+Math.round(pct)+'"><i style="width:'+pct.toFixed(0)+'%"></i></div>'
+     + '<div class="muted" style="font-size:13px;margin-top:6px">'+Math.round(pct)+'% de tu meta'
+     + (falta > 0 && restan > 0 ? ' · te faltan '+fmt(falta,'EUR')+' (~'+fmt(falta/restan,'EUR')+'/mes en los '+restan+' meses que quedan)' : falta <= 0 ? ' · ¡meta cumplida!' : '')+'</div></div>'
+     + '<div style="display:flex;align-items:center;gap:10px"><label class="lbl" for="meta" style="margin:0">Meta anual (€)</label><input id="meta" class="fld" style="width:130px;height:40px" inputmode="numeric" value="'+metaAhorro+'"></div></div>';
+
+  h += '<div class="card"><h2 class="t">Ingresos y gastos por mes</h2>'
+     + '<div style="display:flex;gap:14px;font-size:13px;font-weight:600"><span><i class="dot" style="background:'+C_ING+'"></i>Ingresos</span><span><i class="dot" style="background:'+C_GAS+'"></i>Gastos</span></div>'
+     + '<div id="chart1" style="max-width:600px;width:100%">'+svgColumnas(meses, hasta)+'</div><div id="readout" style="font-size:14px;min-height:42px"></div></div>';
+
+  h += '<div class="card"><h2 class="t">Ahorro acumulado</h2><div class="muted" style="font-size:13px;margin-top:-6px">Ingresos menos gastos, mes a mes (en k €)</div><div style="max-width:600px;width:100%">'+svgAcumulado(meses, hasta)+'</div></div>';
+
+  var cats = Object.keys(cat).sort(function(a,b){ return cat[b]-cat[a]; });
+  if (cats.length) {
+    var mx = cat[cats[0]];
+    h += '<div class="card"><h2 class="t">Adónde se fue la plata</h2><div style="display:flex;flex-direction:column;gap:12px">';
+    cats.slice(0,8).forEach(function(k){
+      h += '<div class="catrow"><div class="h"><span>'+esc(k)+'</span><span class="num">'+fmt(cat[k],'EUR')+' <span class="muted" style="font-weight:500">· '+(gas?Math.round(cat[k]/gas*100):0)+'%</span></span></div><div class="bar"><i style="width:'+Math.max(3,Math.round(cat[k]/mx*100))+'%"></i></div></div>';
+    });
+    h += '</div></div>';
+  }
+
+  h += '<details class="card"><summary style="font-weight:700;font-size:15px;cursor:pointer;min-height:32px">Ver tabla mes a mes</summary><table style="width:100%;border-collapse:collapse;font-size:14px;margin-top:8px"><thead><tr style="text-align:right;color:var(--ink2);font-size:12px"><th style="text-align:left;padding:6px 0">Mes</th><th>Ingresos</th><th>Gastos</th><th>Ahorro</th></tr></thead><tbody>';
+  for (var m=0;m<=hasta;m++) h += '<tr style="border-top:1px solid var(--line-soft)"><td style="padding:0"><button class="linkbtn" style="color:var(--ink);font-weight:600" onclick="verMes('+A+','+m+')">'+MESES_LARGO[m]+'</button></td><td class="num" style="text-align:right">'+fmt(meses[m].ing,'EUR')+'</td><td class="num" style="text-align:right">'+fmt(meses[m].gas,'EUR')+'</td><td class="num" style="text-align:right;font-weight:700">'+fmt(meses[m].ing-meses[m].gas,'EUR')+'</td></tr>';
+  h += '</tbody></table></details>';
+  setTimeout(function(){ enlazarAnio(meses, hasta); }, 0);
+  return h;
+}
+function pintarReadout(meses, hasta){
+  var el = document.getElementById('readout'); if (!el) return;
+  var i = selMes == null ? hasta : selMes, x = meses[i];
+  el.innerHTML = '<b>'+MESES_LARGO[i]+'</b> · <span style="color:'+C_ING+'">●</span> Ingresos <b class="num">'+fmt(x.ing,'EUR')+'</b> · <span style="color:'+C_GAS+'">●</span> Gastos <b class="num">'+fmt(x.gas,'EUR')+'</b> · Ahorro <b class="num">'+fmt(x.ing-x.gas,'EUR')+'</b> <button class="linkbtn" style="min-height:32px" onclick="verMes('+anioVer+','+i+')">Ver mes</button>';
+}
+function enlazarAnio(meses, hasta){
+  pintarReadout(meses, hasta);
+  var c = document.getElementById('chart1'); if (!c) return;
+  c.querySelectorAll('[data-m]').forEach(function(r){
+    var f = function(){ selMes = Number(r.dataset.m); c.innerHTML = svgColumnas(meses, hasta); pintarReadout(meses, hasta); enlazarCol(meses, hasta); };
+    r.addEventListener('click', f); r.addEventListener('mouseenter', f);
+  });
+  var meta = document.getElementById('meta');
+  if (meta) meta.addEventListener('input', function(){
+    metaAhorro = Number(meta.value) || 0;
+    clearTimeout(enlazarAnio._t);
+    enlazarAnio._t = setTimeout(function(){ google.script.run.guardarMetaAhorro(metaAhorro); render(); }, 900);
+  });
+}
+function enlazarCol(meses, hasta){
+  var c = document.getElementById('chart1'); if (!c) return;
+  c.querySelectorAll('[data-m]').forEach(function(r){
+    var f = function(){ if (selMes === Number(r.dataset.m)) return; selMes = Number(r.dataset.m); c.innerHTML = svgColumnas(meses, hasta); pintarReadout(meses, hasta); enlazarCol(meses, hasta); };
+    r.addEventListener('click', f); r.addEventListener('mouseenter', f);
+  });
 }
 
 /* =====================  CUENTAS  ===================== */

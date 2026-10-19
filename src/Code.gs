@@ -1304,5 +1304,6 @@ function getBootstrapLiviano() {
     cuentas: getCuentas(),
     reglas: getReglas(),
     patrimonio: getPatrimonio(),
+    metaAhorro: getMetaAhorro(),
   };
 }
