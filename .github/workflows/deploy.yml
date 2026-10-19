@@ -36,6 +36,12 @@ jobs:
 
       # Traemos el appsscript.json real del proyecto (zona horaria, permisos, config de la web app)
       # para no pisarlo con uno inventado. Si el repo ya tiene uno propio en src/, se respeta.
+      - name: Diagnóstico del ID
+        env:
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          echo "::notice::SCRIPT_ID largo=${#SCRIPT_ID} formato_ok=$([[ "$SCRIPT_ID" =~ ^[A-Za-z0-9_-]+$ ]] && echo si || echo NO) empieza=${SCRIPT_ID:0:4} termina=${SCRIPT_ID: -4}"
+
       - name: Manifiesto actual
         run: |
           if [ ! -f src/appsscript.json ]; then
