@@ -1307,3 +1307,121 @@ function getBootstrapLiviano() {
     metaAhorro: getMetaAhorro(),
   };
 }
+
+/* ============================ CIERRE: EXTRACTO CON COINCIDENCIAS ============================ */
+
+function diasEntre_(a, b) { return Math.round((a.getTime() - b.getTime()) / 86400000); }
+
+/**
+ * Como previsualizarCsv(), pero además busca, entre los movimientos PENDIENTES de esa cuenta (Validado = 'No'
+ * y sin Conciliado), los que podrían ser el mismo que cada fila del banco: mismo monto y fecha a ±3 días.
+ * No escribe nada. Una coincidencia única se propone ya fusionada (fusionarCon); varias, se elige en pantalla.
+ */
+function previsualizarExtracto(perfil, cuentaNombre, csvTexto) {
+  const base = previsualizarCsv(perfil, csvTexto);
+  if (!base.ok) return base;
+  const pend = rowsToObjects_(sheet_('Transacciones'))
+    .filter((r) => r['Validado'] === 'No' && !r['Conciliado'] && r['Cuenta'] === cuentaNombre)
+    .map((r) => ({
+      id: String(r['ID']),
+      fecha: formatDate_(r['Fecha']),
+      concepto: String(r['Concepto'] || ''),
+      monto: Number(r['Monto']) || 0,
+      categoria: String(r['Categoría'] || ''),
+      subcategoria: String(r['Subcategoría'] || ''),
+    }));
+  const usados = {};
+  base.filas.forEach((f) => {
+    const fecha = parseFechaDDMMYYYY_(f.fecha);
+    f.candidatos = pend.filter((p) => Math.abs(p.monto - f.monto) < 0.005 && Math.abs(diasEntre_(parseFechaDDMMYYYY_(p.fecha), fecha)) <= 3);
+    f.fusionarCon = '';
+    if (f.candidatos.length === 1 && !usados[f.candidatos[0].id]) {
+      f.fusionarCon = f.candidatos[0].id;
+      usados[f.candidatos[0].id] = true;
+    }
+  });
+  return base;
+}
+
+/**
+ * Escribe el resultado de la revisión. Las filas con fusionarCon NO crean un movimiento nuevo: actualizan el
+ * que Dani ya había cargado (fecha y monto del banco, concepto y categoría suyos) y lo dejan confirmado y conciliado.
+ * El resto entra como movimiento nuevo, conciliado; si no tiene categoría queda pendiente ('Validado' = 'No').
+ */
+function confirmarExtracto(perfil, cuentaNombre, moneda, filas) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sh = sheet_('Transacciones');
+    const values = sh.getDataRange().getValues();
+    const headers = values[0];
+    const col = (n) => headers.indexOf(n);
+    const idCol = col('ID');
+    const hoy = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const filaPorId = {};
+    for (let i = 1; i < values.length; i++) filaPorId[values[i][idCol]] = i + 1;
+
+    const existentes = {};
+    rowsToObjects_(sh).forEach((r) => { existentes[hashTx_(r['Fecha'], r['Concepto'], r['Monto'])] = true; });
+
+    const colVal = columnaValidado_(sh);
+    const headers2 = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    const col2 = (n) => headers2.indexOf(n);
+
+    let fusionados = 0, omitidosPorDuplicado = 0;
+    const nuevas = [];
+    const aRecordar = [];
+
+    filas.forEach((f) => {
+      const fecha = parseFechaDDMMYYYY_(f.fecha);
+      if (f.fusionarCon && filaPorId[f.fusionarCon]) {
+        const fila = filaPorId[f.fusionarCon];
+        sh.getRange(fila, col('Fecha') + 1).setValue(fecha);
+        sh.getRange(fila, col('Monto') + 1).setValue(Number(f.monto));
+        if (f.categoria && !values[fila - 1][col('Categoría')]) {
+          sh.getRange(fila, col('Categoría') + 1).setValue(f.categoria);
+          sh.getRange(fila, col('Subcategoría') + 1).setValue(f.subcategoria || '');
+        }
+        sh.getRange(fila, colVal).setValue('Sí');
+        if (col2('Conciliado') !== -1) sh.getRange(fila, col2('Conciliado') + 1).setValue(hoy);
+        fusionados++;
+        if (f.recordarRegla && f.categoria) aRecordar.push(f);
+        return;
+      }
+      const hash = hashTx_(fecha, f.concepto, Number(f.monto));
+      if (existentes[hash]) { omitidosPorDuplicado++; return; }
+      existentes[hash] = true;
+      const fila = headers2.map(() => '');
+      const poner = (n, v) => { const c = col2(n); if (c !== -1) fila[c] = v; };
+      poner('ID', Utilities.getUuid());
+      poner('Fecha', fecha);
+      poner('Concepto', f.concepto);
+      poner('Monto', Number(f.monto));
+      poner('Moneda', moneda);
+      poner('Cuenta', cuentaNombre);
+      poner('Categoría', f.categoria || '');
+      poner('Subcategoría', f.subcategoria || '');
+      poner('Origen', 'importado:' + perfil);
+      poner('Validado', f.categoria ? 'Sí' : 'No');
+      poner('Conciliado', hoy);
+      nuevas.push(fila);
+      if (f.recordarRegla && f.categoria) aRecordar.push(f);
+    });
+
+    if (nuevas.length) {
+      sh.getRange(sh.getLastRow() + 1, 1, nuevas.length, headers2.length).setValues(nuevas);
+    }
+
+    const patrones = {};
+    getReglas().forEach((r) => { patrones[r.patron] = true; });
+    aRecordar.forEach((f) => {
+      const patron = String(f.concepto || '').toLowerCase();
+      if (patron && !patrones[patron]) { agregarRegla(patron, f.categoria, f.subcategoria || ''); patrones[patron] = true; }
+    });
+
+    SpreadsheetApp.flush();
+    return { ok: true, agregados: nuevas.length, fusionados: fusionados, omitidosPorDuplicado: omitidosPorDuplicado };
+  } finally {
+    lock.releaseLock();
+  }
+}
