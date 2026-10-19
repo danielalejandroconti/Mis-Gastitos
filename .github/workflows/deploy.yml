@@ -1,4 +1,5 @@
 name: Deploy a Apps Script
+# (secretos configurados)
 
 # Cada push a main sube el código al proyecto de Apps Script (queda en HEAD → URL /dev).
 # Para publicar en la URL /exec: Actions → "Deploy a Apps Script" → Run workflow → marcar "publicar".
