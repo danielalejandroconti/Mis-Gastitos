@@ -1,0 +1,56 @@
+name: Deploy a Apps Script
+
+# Cada push a main sube el código al proyecto de Apps Script (queda en HEAD → URL /dev).
+# Para publicar en la URL /exec: Actions → "Deploy a Apps Script" → Run workflow → marcar "publicar".
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', '.github/workflows/deploy.yml']
+  workflow_dispatch:
+    inputs:
+      publicar:
+        description: 'Publicar nueva versión en el despliegue /exec'
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @google/clasp@2
+
+      - name: Credenciales y proyecto
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          test -n "$CLASPRC_JSON" || { echo "Falta el secreto CLASPRC_JSON (ver README)"; exit 1; }
+          test -n "$SCRIPT_ID" || { echo "Falta el secreto SCRIPT_ID (ver README)"; exit 1; }
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          printf '{"scriptId":"%s","rootDir":"src"}' "$SCRIPT_ID" > .clasp.json
+
+      # Traemos el appsscript.json real del proyecto (zona horaria, permisos, config de la web app)
+      # para no pisarlo con uno inventado. Si el repo ya tiene uno propio en src/, se respeta.
+      - name: Manifiesto actual
+        run: |
+          if [ ! -f src/appsscript.json ]; then
+            mkdir /tmp/remoto && cd /tmp/remoto
+            printf '{"scriptId":"%s"}' "${{ secrets.SCRIPT_ID }}" > .clasp.json
+            clasp pull
+            cp appsscript.json "$GITHUB_WORKSPACE/src/appsscript.json"
+          fi
+
+      - name: Subir código (HEAD, URL /dev)
+        run: clasp push --force
+
+      - name: Publicar en /exec
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publicar }}
+        env:
+          DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+        run: |
+          test -n "$DEPLOYMENT_ID" || { echo "Falta el secreto DEPLOYMENT_ID (ver README)"; exit 1; }
+          clasp deploy -i "$DEPLOYMENT_ID" -d "GitHub ${GITHUB_SHA::7}"
