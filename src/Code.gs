@@ -7,6 +7,15 @@
 const SHEET_ID = '1_UPXULf7J7wIIhdpYx76QidfC36ljOBpKu4B79lAAJ8';
 
 function doGet(e) {
+  // Si activaste el Atajo del iPhone, existe una "ventanilla" pública (acceso: Cualquier persona) para recibir los pagos.
+  // Esa URL NO debe mostrar la app: solo la abre quien entró con tu cuenta de Google.
+  if (PropertiesService.getScriptProperties().getProperty('VENTANILLA_ACTIVA') === 'si') {
+    const yo = Session.getEffectiveUser().getEmail();
+    const quien = Session.getActiveUser().getEmail();
+    if (!quien || !yo || quien !== yo) {
+      return ContentService.createTextOutput('Mis gastitos: ventanilla del Atajo. Acá no hay nada para ver.');
+    }
+  }
   const vieja = e && e.parameter && e.parameter.v === 'old';
   return HtmlService.createTemplateFromFile(vieja ? 'IndexViejo' : 'Index')
     .evaluate()
@@ -1306,6 +1315,87 @@ function getBootstrapLiviano() {
     patrimonio: getPatrimonio(),
     metaAhorro: getMetaAhorro(),
   };
+}
+
+/* ============================ ATAJO DEL iPHONE (Apple Pay → movimiento pendiente) ============================ */
+// El Atajo hace un POST con JSON: { clave, comercio, monto, cuenta, tarjeta?, moneda?, fecha?, id? }.
+// Solo INSERTA un movimiento pendiente (Validado 'No', Origen 'atajo'); no lee ni devuelve datos tuyos.
+
+function claveAtajo_() {
+  const p = PropertiesService.getScriptProperties();
+  let k = p.getProperty('ATAJO_CLAVE');
+  if (!k) { k = Utilities.getUuid().replace(/-/g, '').slice(0, 20); p.setProperty('ATAJO_CLAVE', k); }
+  return k;
+}
+
+/** La app la llama al abrir "Atajo del iPhone": muestra la clave y activa la protección de la ventanilla. */
+function getConfigAtajo() {
+  PropertiesService.getScriptProperties().setProperty('VENTANILLA_ACTIVA', 'si');
+  return { clave: claveAtajo_(), cuentas: getCuentas().map((c) => String(c['Nombre'] || '')).filter(Boolean) };
+}
+
+function respuestaJson_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  let b;
+  try { b = JSON.parse(e.postData.contents); } catch (err) { return respuestaJson_({ ok: false, error: 'El pedido no es JSON válido.' }); }
+  if (!b || String(b.clave || '') !== claveAtajo_()) return respuestaJson_({ ok: false, error: 'Clave incorrecta.' });
+  try { return respuestaJson_(registrarPagoAtajo_(b)); }
+  catch (err) { return respuestaJson_({ ok: false, error: String(err && err.message || err) }); }
+}
+
+// "12,50 €", "€12.50", "1.234,56", "US$ 9.99" -> { valor: 12.5, moneda: 'EUR' } (valor siempre positivo)
+function parseMontoAtajo_(v) {
+  if (typeof v === 'number') return { valor: Math.abs(v), moneda: '' };
+  let s = String(v || '');
+  const moneda = /US\$|USD/i.test(s) ? 'USD' : /ARS|AR\$/i.test(s) ? 'ARS' : /€|EUR/i.test(s) ? 'EUR' : '';
+  s = s.replace(/[^0-9.,]/g, '');
+  if (!s) return { valor: 0, moneda: moneda };
+  const lc = s.lastIndexOf(','), lp = s.lastIndexOf('.');
+  if (lc !== -1 && lp !== -1) {
+    s = lc > lp ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  } else if (lc !== -1) {
+    s = (s.split(',').length > 2) ? s.replace(/,/g, '') : s.replace(',', '.');
+  } else if (lp !== -1) {
+    const trasPunto = s.length - lp - 1;
+    if (s.split('.').length > 2 || trasPunto === 3) s = s.replace(/\./g, '');
+  }
+  return { valor: Math.abs(Number(s)) || 0, moneda: moneda };
+}
+
+function resolverCuentaAtajo_(cuenta, tarjeta) {
+  const nombres = getCuentas().map((c) => String(c['Nombre'] || '')).filter(Boolean);
+  const buscar = (t) => {
+    const x = String(t || '').toLowerCase().trim();
+    if (!x) return '';
+    const exacta = nombres.filter((n) => n.toLowerCase() === x)[0];
+    if (exacta) return exacta;
+    return nombres.filter((n) => x.indexOf(n.toLowerCase()) !== -1)[0] || '';
+  };
+  return buscar(cuenta) || buscar(tarjeta) || String(cuenta || tarjeta || 'Sin cuenta');
+}
+
+function registrarPagoAtajo_(b) {
+  const m = parseMontoAtajo_(b.monto);
+  if (!m.valor) return { ok: false, error: 'No pude leer el monto: "' + b.monto + '".' };
+  const moneda = String(b.moneda || m.moneda || 'EUR').toUpperCase();
+  const comercio = String(b.comercio || '').trim() || 'Pago con tarjeta';
+  const cuenta = resolverCuentaAtajo_(b.cuenta, b.tarjeta);
+  const ahora = new Date();
+  const fecha = /^\d{4}-\d{2}-\d{2}$/.test(String(b.fecha || '')) ? String(b.fecha) : Utilities.formatDate(ahora, 'Europe/Madrid', 'yyyy-MM-dd');
+  // ID estable dentro del mismo minuto: si el Atajo reintenta, no duplica.
+  const base = comercio + '|' + m.valor + '|' + cuenta + '|' + Utilities.formatDate(ahora, 'Europe/Madrid', 'yyyyMMddHHmm');
+  const hash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, base)
+    .map((x) => ('0' + (x < 0 ? x + 256 : x).toString(16)).slice(-2)).join('');
+  const id = b.id ? String(b.id) : 'atajo-' + hash;
+  const cat = categorizar_(comercio, getReglas()) || { categoria: '', subcategoria: '' };
+  const r = addTransaccionManual({
+    id: id, fecha: fecha, concepto: comercio, monto: -m.valor, moneda: moneda, cuenta: cuenta,
+    categoria: cat.categoria || '', subcategoria: cat.subcategoria || '', origen: 'atajo', notas: '',
+  });
+  return { ok: true, id: id, duplicado: !!r.duplicado, concepto: comercio, monto: -m.valor, moneda: moneda, cuenta: cuenta, categoria: cat.categoria || '' };
 }
 
 /* ============================ EDITAR MOVIMIENTO (fecha + categoría) — app v2 ============================ */

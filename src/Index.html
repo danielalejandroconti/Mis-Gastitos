@@ -1030,6 +1030,7 @@ function htmlCuentas(){
     h += '</div>';
   }
   if (patrimonio.totalEUR) h += '<div class="card dashed" style="flex-direction:row;justify-content:space-between;border-radius:14px"><span class="muted" style="font-size:13px">Total referencial (aprox.)</span><span class="num" style="font-weight:700">≈ '+fmt(patrimonio.totalEUR,'EUR')+'</span></div>';
+  h += '<button class="btn w" onclick="abrirAtajo()">Atajo del iPhone (pagos con Apple Pay)</button>';
   h += '<a class="linkbtn" style="display:flex;align-items:center;font-size:13px" href="<?= ScriptApp.getService().getUrl() ?>?v=old">Reglas, topes por categoría y tarjetas: abrir la versión anterior</a>';
   return h;
 }
@@ -1211,6 +1212,25 @@ function guardarEdicion(confirmar){
     if (r && r.ok === false) { t.categoria = antes.c; t.subcategoria = antes.s; t.fecha = antes.f; transacciones.sort(function(a,b){ return parseF(b.fecha)-parseF(a.fecha); }); toast(r.error || 'No se pudo guardar el cambio'); render(); return; }
     if (confirmar) confirmarIds([id]);
   }).actualizarMovimiento(id, { fecha: fecha, categoria: cat, subcategoria: sub });
+}
+
+
+/* =====================  ATAJO DEL IPHONE  ===================== */
+function abrirAtajo(){
+  document.getElementById('overlay').innerHTML = '<div class="sheetbg" onclick="if(event.target===this)cerrarSheet()"><div class="sheet" role="dialog" aria-label="Atajo del iPhone"><div class="hd"><h2 class="t">Atajo del iPhone</h2><button class="x" aria-label="Cerrar" onclick="cerrarSheet()">'+ic('close',22)+'</button></div><div class="muted" id="atajo-body">Buscando tu clave…</div></div></div>';
+  google.script.run.withSuccessHandler(function(r){
+    var el = document.getElementById('atajo-body'); if (!el) return;
+    if (!r || !r.clave) { el.innerHTML = '<div class="err">No pude leer la clave.</div>'; return; }
+    el.innerHTML = '<div class="card"><span class="lbl">Tu clave secreta</span><div class="num" id="atajo-clave" style="font-size:18px;font-weight:700;word-break:break-all;user-select:all">'+esc(r.clave)+'</div><button class="btn" onclick="copiarAtajo()">Copiar clave</button></div>'
+      + '<div style="margin-top:12px">Esta clave es la contraseña que usa el Atajo para anotar tus pagos. No la compartas. Los pagos llegan como <b>pendientes</b> y los confirmás desde Movimientos.</div>'
+      + '<div style="margin-top:8px">Cuentas que reconoce: '+esc((r.cuentas||[]).join(', '))+'</div>';
+  }).withFailureHandler(function(){ var el = document.getElementById('atajo-body'); if (el) el.innerHTML = '<div class="err">No pude leer la clave.</div>'; }).getConfigAtajo();
+}
+function copiarAtajo(){
+  var t = document.getElementById('atajo-clave').textContent;
+  function ok(){ toast('Clave copiada'); }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(ok, function(){ toast('Mantené apretada la clave para copiarla'); });
+  else toast('Mantené apretada la clave para copiarla');
 }
 
 document.addEventListener('keydown', function(e){ if (e.key==='Escape') cerrarSheet(); });
