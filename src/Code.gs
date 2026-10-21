@@ -4,6 +4,7 @@
  * Pegá el ID de tu Google Sheet acá abajo. Lo sacás de la URL:
  * https://docs.google.com/spreadsheets/d/ESTE_ES_EL_ID/edit
  */
+// Despliegue: cada push a main publica en HEAD (/dev) y, si hay DEPLOYMENT_ID, en /exec.
 const SHEET_ID = '1_UPXULf7J7wIIhdpYx76QidfC36ljOBpKu4B79lAAJ8';
 
 function doGet(e) {
