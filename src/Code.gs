@@ -1380,9 +1380,11 @@ function resolverCuentaAtajo_(cuenta, tarjeta) {
 function registrarPagoAtajo_(b) {
   const m = parseMontoAtajo_(b.monto);
   if (!m.valor) return { ok: false, error: 'No pude leer el monto: "' + b.monto + '".' };
-  const moneda = String(b.moneda || m.moneda || 'EUR').toUpperCase();
   const comercio = String(b.comercio || '').trim() || 'Pago con tarjeta';
   const cuenta = resolverCuentaAtajo_(b.cuenta, b.tarjeta);
+  // Moneda: la que mande el Atajo, o la que detecte en el monto, o la de la cuenta (Cuentas → Moneda), o EUR.
+  const filaCuenta = getCuentas().filter((c) => String(c['Nombre']) === cuenta)[0];
+  const moneda = String(b.moneda || m.moneda || (filaCuenta && filaCuenta['Moneda']) || 'EUR').toUpperCase();
   const ahora = new Date();
   const fecha = /^\d{4}-\d{2}-\d{2}$/.test(String(b.fecha || '')) ? String(b.fecha) : Utilities.formatDate(ahora, 'Europe/Madrid', 'yyyy-MM-dd');
   // ID estable dentro del mismo minuto: si el Atajo reintenta, no duplica.
