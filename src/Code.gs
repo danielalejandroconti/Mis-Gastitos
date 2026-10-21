@@ -1375,12 +1375,21 @@ function parseMontoAtajo_(v) {
 
 function resolverCuentaAtajo_(cuenta, tarjeta) {
   const nombres = getCuentas().map((c) => String(c['Nombre'] || '')).filter(Boolean);
+  const existe = (n) => nombres.filter((x) => x === n)[0] || '';
   const buscar = (t) => {
     const x = String(t || '').toLowerCase().trim();
     if (!x) return '';
     const exacta = nombres.filter((n) => n.toLowerCase() === x)[0];
     if (exacta) return exacta;
-    return nombres.filter((n) => x.indexOf(n.toLowerCase()) !== -1)[0] || '';
+    const contiene = nombres.filter((n) => x.indexOf(n.toLowerCase()) !== -1)[0];
+    if (contiene) return contiene;
+    // Alias por el nombre de la tarjeta en Wallet (ajustables). Solo valen si la cuenta existe en la pestaña Cuentas.
+    if (/revolut/.test(x)) return existe('Revolut');
+    if (/trade ?republic/.test(x)) return existe('Trade Republic');
+    if (/movilidad|transporte/.test(x)) return existe('Edenred Transporte');
+    if (/restaurante|comida|edenred/.test(x)) return existe('Edenred Comida');
+    if (/d[eé]bito|santander/.test(x)) return existe('Santander');
+    return '';
   };
   return buscar(cuenta) || buscar(tarjeta) || String(cuenta || tarjeta || 'Sin cuenta');
 }
