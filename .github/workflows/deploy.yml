@@ -2,7 +2,8 @@ name: Deploy a Apps Script
 # (secretos configurados)
 
 # Cada push a main sube el código al proyecto de Apps Script (queda en HEAD → URL /dev).
-# Para publicar en la URL /exec: Actions → "Deploy a Apps Script" → Run workflow → marcar "publicar".
+# Si existe el secreto DEPLOYMENT_ID, además publica una versión nueva en esa implementación (/exec de uso diario).
+# También se puede publicar a mano: Actions → "Deploy a Apps Script" → Run workflow → marcar "publicar".
 on:
   push:
     branches: [main]
@@ -52,10 +53,13 @@ jobs:
         run: clasp push --force
 
       - name: Publicar en /exec
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publicar }}
         env:
           DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+          PUBLICAR_MANUAL: ${{ github.event_name == 'workflow_dispatch' && inputs.publicar }}
         run: |
           DEPLOYMENT_ID="$(printf '%s' "$DEPLOYMENT_ID" | tr -d '[:space:]')"
-          test -n "$DEPLOYMENT_ID" || { echo "Falta el secreto DEPLOYMENT_ID (ver README)"; exit 1; }
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            if [ "$PUBLICAR_MANUAL" = "true" ]; then echo "::error::Falta el secreto DEPLOYMENT_ID (ver README)"; exit 1; fi
+            echo "Sin DEPLOYMENT_ID: solo quedó en /dev."; exit 0
+          fi
           clasp deploy -i "$DEPLOYMENT_ID" -d "GitHub ${GITHUB_SHA::7}"

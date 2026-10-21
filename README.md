@@ -12,7 +12,7 @@ App personal de gastos: Google Apps Script (Web App) + Google Sheet como base de
 ## Cómo se despliega
 
 Cada push a `main` sube `src/` al proyecto de Apps Script con [clasp](https://github.com/google/clasp) (queda en HEAD, URL `/dev`).
-Para publicar en la URL `/exec`: pestaña **Actions → Deploy a Apps Script → Run workflow →** marcar *publicar*.
+Si está el secreto `DEPLOYMENT_ID`, cada push a `main` también publica en la URL `/exec`. Sin ese secreto: pestaña **Actions → Deploy a Apps Script → Run workflow →** marcar *publicar*.
 
 ### Configuración (una sola vez)
 
