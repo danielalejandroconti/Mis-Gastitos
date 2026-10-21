@@ -303,8 +303,15 @@ function actualizarCategoriaLote(ids, categoria, subcategoria) {
   return { ok: true, actualizadas: actualizadas };
 }
 
+// Misma llamada de siempre, ahora con candado (varias escrituras a la vez no se pisan al correr las filas).
 function eliminarTransaccion(id) {
-  return eliminarFilaPorId_('Transacciones', id);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    return eliminarFilaPorId_('Transacciones', id);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Herramienta de limpieza manual: corré esto UNA SOLA VEZ desde el editor de Apps Script

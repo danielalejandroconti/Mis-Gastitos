@@ -1187,11 +1187,27 @@ function pintarEditar(){
     + '<div id="e-err"></div>'
     + '<div style="display:flex;gap:10px"><button class="btn p" style="flex:1;height:52px;font-size:16px" onclick="guardarEdicion(false)">Guardar</button>'
     + (esPendiente(t) ? '<button class="btn" style="height:52px" onclick="guardarEdicion(true)">Guardar y confirmar</button>' : '')
-    + '</div></div></div>';
+    + '</div>'
+    + (edit.borrar
+        ? '<div class="err" role="alert" style="display:flex;flex-direction:column;gap:8px">¿Eliminar "'+esc(t.concepto)+'" ('+fmt(t.monto,t.moneda,true)+')? Se borra del Sheet y no se puede deshacer.<div style="display:flex;gap:10px"><button class="btn" style="flex:1;background:var(--amber);border-color:var(--amber);color:#fff" onclick="eliminarMovimiento()">Sí, eliminar</button><button class="btn" style="flex:1" onclick="edit.borrar=false;pintarEditar()">Cancelar</button></div></div>'
+        : '<button class="linkbtn" style="color:var(--amber);justify-content:center;width:100%" onclick="edit.borrar=true;pintarEditar()">Eliminar movimiento</button>')
+    + '</div></div>';
   document.getElementById('overlay').innerHTML = h;
   document.getElementById('e-fecha').addEventListener('change', function(e){ edit.fecha=e.target.value; });
   document.getElementById('e-cat').addEventListener('change', function(e){ edit.categoria=e.target.value; edit.subcategoria=''; pintarEditar(); });
   var s = document.getElementById('e-sub'); if (s) s.addEventListener('change', function(e){ edit.subcategoria=e.target.value; });
+}
+function eliminarMovimiento(){
+  var id = edit.id;
+  var i = -1; transacciones.forEach(function(x,k){ if (x.id===id) i = k; });
+  if (i < 0) return;
+  var t = transacciones[i];
+  transacciones.splice(i, 1);
+  cerrarSheet(); render(); toast('Movimiento eliminado');
+  function volver(msg){ transacciones.push(t); transacciones.sort(function(a,b){ return parseF(b.fecha)-parseF(a.fecha); }); toast(msg); render(); }
+  google.script.run.withFailureHandler(function(){ volver('No se pudo eliminar'); })
+    .withSuccessHandler(function(r){ if (r && r.ok === false) volver(r.error || 'No se pudo eliminar'); })
+    .eliminarTransaccion(id);
 }
 function guardarEdicion(confirmar){
   var fe = document.getElementById('e-fecha'); if (fe) edit.fecha = fe.value;

@@ -60,5 +60,12 @@ with sync_playwright() as p:
             c=[c for c in pg.evaluate('window.__calls') if c[0]=='actualizarMovimiento']
             print('actualizarMovimiento',json.dumps(c[-1][1],ensure_ascii=False))
             pg.screenshot(path='/tmp/shot_m_editar.png')
+            # --- eliminar
+            n0=pg.evaluate('transacciones.length'); id0=pg.evaluate('transacciones[0].id')
+            pg.locator('.row').first.click(); pg.wait_for_selector('#e-fecha')
+            pg.click('text=Eliminar movimiento'); pg.wait_for_selector('text=Sí, eliminar'); pg.screenshot(path='/tmp/shot_m_borrar.png')
+            pg.click('text=Sí, eliminar'); pg.wait_for_timeout(300)
+            d=[c for c in pg.evaluate('window.__calls') if c[0]=='eliminarTransaccion']
+            print('eliminarTransaccion',d[-1][1],'esperado',id0,'| movimientos',n0,'->',pg.evaluate('transacciones.length'))
         print(name,'errs',errs)
     b.close()
