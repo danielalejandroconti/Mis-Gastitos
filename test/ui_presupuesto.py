@@ -69,3 +69,18 @@ with sync_playwright() as p:
             print('eliminarTransaccion',d[-1][1],'esperado',id0,'| movimientos',n0,'->',pg.evaluate('transacciones.length'))
         print(name,'errs',errs)
     b.close()
+
+# --- ocultar saldos / patrimonio
+with sync_playwright() as p:
+    b=p.chromium.launch(); pg=b.new_page(viewport={'width':390,'height':844}); errs=[]
+    pg.on('pageerror',lambda e:errs.append(str(e)))
+    pg.add_init_script(MOCK); pg.goto('file:///tmp/t_index2.html'); pg.wait_for_selector('#app:not([hidden])')
+    antes=pg.locator('.card:has-text("Patrimonio hoy")').first.inner_text()
+    pg.click('button[aria-label="Ocultar saldos"]'); pg.wait_for_timeout(100)
+    desp=pg.locator('.card:has-text("Patrimonio hoy")').first.inner_text()
+    print('patrimonio visible:',antes.replace('\n',' | '),'\n  oculto:',desp.replace('\n',' | '))
+    pg.screenshot(path='/tmp/shot_oculto.png')
+    pg.click('[data-go=cuentas] >> visible=true'); pg.wait_for_timeout(100)
+    print('cuentas oculto:',pg.inner_text('#content')[:200].replace('\n',' | '))
+    pg.reload(); pg.wait_for_selector('#app:not([hidden])'); print('persiste tras recargar:',pg.evaluate('oculto'), 'errs',errs)
+    b.close()

@@ -180,7 +180,9 @@ const ICONS = {
   check:'<path d="M5 12l5 5 9-10"/>',
   close:'<path d="M6 6l12 12M18 6L6 18"/>',
   chevL:'<path d="M15 6l-6 6 6 6"/>',
-  chevR:'<path d="M9 6l6 6-6 6"/>'
+  chevR:'<path d="M9 6l6 6-6 6"/>',
+  eye:'<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff:'<path d="M3 3l18 18"/><path d="M10.6 6.2A9.8 9.8 0 0112 6c6 0 10 6 10 6a17 17 0 01-3.2 3.9M6.6 6.6A17 17 0 002 12s4 7 10 7a9.7 9.7 0 004.4-1.1"/><path d="M9.9 9.9a3 3 0 004.2 4.2"/>'
 };
 function ic(name, size, sw){
   return '<svg viewBox="0 0 24 24" width="'+(size||22)+'" height="'+(size||22)+'" fill="none" stroke="currentColor" stroke-width="'+(sw||1.8)+'" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+ICONS[name]+'</svg>';
@@ -226,6 +228,11 @@ function fmt(n, moneda, signo){
   var sg = neg ? '−' : (signo ? '+' : '');
   return sg + pre + s + suf;
 }
+// Modo "mostrar mi app": oculta saldos y patrimonio (se acuerda en este dispositivo).
+var oculto = lsGet('mg-oculto') === '1';
+function sec(txt){ return oculto ? '•••••' : txt; }
+function toggleOculto(){ oculto = !oculto; lsSet('mg-oculto', oculto ? '1' : '0'); render(); }
+function btnOjo(){ return '<button aria-label="'+(oculto?'Mostrar saldos':'Ocultar saldos')+'" onclick="toggleOculto()" style="border:0;background:none;width:44px;height:44px;color:var(--ink2);display:flex;align-items:center;justify-content:center">'+ic(oculto?'eyeoff':'eye',22)+'</button>'; }
 function esPendiente(t){ return t.validado === false; }
 function faltaCat(t){ return !t.categoria; }
 function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
@@ -462,14 +469,14 @@ function htmlMes(){
                 : '<div class="muted" style="font-size:14px">No hay nada esperando confirmación.</div>')
     + '</button>';
 
-  h += '<div class="card"><div class="eyebrow">Patrimonio hoy</div>';
+  h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin:-8px -8px 0 0"><div class="eyebrow">Patrimonio hoy</div>'+btnOjo()+'</div>';
   var grupos = (patrimonio.grupos||[]).filter(function(x){ return x.total; });
   var col = {EUR:'#0E6B4D',ARS:'#1F4F99',USD:'#566159',Acciones:'#566159',Crypto:'#566159'};
   grupos.forEach(function(x){
     var mon = x.moneda || x.grupo;
-    h += '<div class="pat"><span><i class="dot" style="background:'+(col[x.grupo]||'#566159')+'"></i>'+esc(x.grupo)+'</span><span class="num" style="font-weight:700">'+fmt(x.total, mon==='USD'?'USD':mon==='ARS'?'ARS':'EUR')+'</span></div>';
+    h += '<div class="pat"><span><i class="dot" style="background:'+(col[x.grupo]||'#566159')+'"></i>'+esc(x.grupo)+'</span><span class="num" style="font-weight:700">'+sec(fmt(x.total, mon==='USD'?'USD':mon==='ARS'?'ARS':'EUR'))+'</span></div>';
   });
-  if (patrimonio.totalEUR) h += '<div class="card dashed" style="padding:10px 12px;flex-direction:row;justify-content:space-between;border-radius:12px"><span class="muted" style="font-size:13px">Total referencial</span><span class="num" style="font-weight:700">≈ '+fmt(patrimonio.totalEUR,'EUR')+'</span></div>';
+  if (patrimonio.totalEUR) h += '<div class="card dashed" style="padding:10px 12px;flex-direction:row;justify-content:space-between;border-radius:12px"><span class="muted" style="font-size:13px">Total referencial</span><span class="num" style="font-weight:700">≈ '+sec(fmt(patrimonio.totalEUR,'EUR'))+'</span></div>';
   h += '</div></div>';
   return h;
 }
@@ -1014,22 +1021,22 @@ function htmlCuentas(){
     grupos[g].items.push({ nombre:c['Nombre'], saldo:sd, moneda:c['Moneda']||g, tipo:c['Tipo']||'' });
     grupos[g].total += sd;
   });
-  var h = '<div class="top"><h1 class="t">Cuentas</h1><div id="sync-slot"></div></div>';
+  var h = '<div class="top"><h1 class="t">Cuentas</h1><div style="display:flex;align-items:center;gap:4px">'+btnOjo()+'<div id="sync-slot"></div></div></div>';
   orden.forEach(function(g){
     var G = grupos[g];
-    h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="eyebrow">'+esc(g)+'</div><div class="t num" style="font-size:22px">'+fmt(G.total,G.moneda)+'</div></div>';
+    h += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="eyebrow">'+esc(g)+'</div><div class="t num" style="font-size:22px">'+sec(fmt(G.total,G.moneda))+'</div></div>';
     G.items.forEach(function(it){
-      h += '<div class="pat"><span>'+esc(it.nombre)+(it.tipo?' <span class="muted" style="font-size:12.5px">· '+esc(it.tipo)+'</span>':'')+'</span><span class="num" style="font-weight:700">'+fmt(it.saldo,it.moneda)+'</span></div>';
+      h += '<div class="pat"><span>'+esc(it.nombre)+(it.tipo?' <span class="muted" style="font-size:12.5px">· '+esc(it.tipo)+'</span>':'')+'</span><span class="num" style="font-weight:700">'+sec(fmt(it.saldo,it.moneda))+'</span></div>';
     });
     h += '</div>';
   });
   var inv = (patrimonio.grupos||[]).filter(function(x){ return x.grupo==='Acciones' || x.grupo==='Crypto'; });
   if (inv.length) {
     h += '<div class="card"><div class="eyebrow">Inversiones</div>';
-    inv.forEach(function(x){ h += '<div class="pat"><span>'+esc(x.grupo)+'</span><span class="num" style="font-weight:700">'+fmt(x.total,'EUR')+'</span></div>'; });
+    inv.forEach(function(x){ h += '<div class="pat"><span>'+esc(x.grupo)+'</span><span class="num" style="font-weight:700">'+sec(fmt(x.total,'EUR'))+'</span></div>'; });
     h += '</div>';
   }
-  if (patrimonio.totalEUR) h += '<div class="card dashed" style="flex-direction:row;justify-content:space-between;border-radius:14px"><span class="muted" style="font-size:13px">Total referencial (aprox.)</span><span class="num" style="font-weight:700">≈ '+fmt(patrimonio.totalEUR,'EUR')+'</span></div>';
+  if (patrimonio.totalEUR) h += '<div class="card dashed" style="flex-direction:row;justify-content:space-between;border-radius:14px"><span class="muted" style="font-size:13px">Total referencial (aprox.)</span><span class="num" style="font-weight:700">≈ '+sec(fmt(patrimonio.totalEUR,'EUR'))+'</span></div>';
   h += '<button class="btn w" onclick="abrirAtajo()">Atajo del iPhone (pagos con Apple Pay)</button>';
   h += '<a class="linkbtn" style="display:flex;align-items:center;font-size:13px" href="<?= ScriptApp.getService().getUrl() ?>?v=old">Reglas, topes por categoría y tarjetas: abrir la versión anterior</a>';
   return h;
