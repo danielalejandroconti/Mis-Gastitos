@@ -194,6 +194,8 @@ var cuentas = [], reglas = [], transacciones = [], patrimonio = { grupos: [], to
 var vista = 'inicio';
 var filtroMov = 'todos';      // 'todos' | 'pendientes'
 var textoBusqueda = '';
+var filtros = { cuenta:'', desde:'', hasta:'', tipo:'todos', min:'', max:'' };   // Movimientos: cuenta, meses (YYYY-MM), tipo y monto (en valor absoluto)
+var filtrosAbiertos = false, limiteLista = 150;
 var cola = [];                // altas locales que todavía no confirmó el servidor
 var MESES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
 var MESES_LARGO = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
@@ -1088,6 +1090,7 @@ function htmlMovimientos(){
   var h = '<div class="top"><h1 class="t">Movimientos</h1><div id="sync-slot"></div></div>';
   h += '<div class="seg" role="tablist"><button class="'+(filtroMov==='todos'?'on':'')+'" onclick="filtroMov=\'todos\';render()">Todos</button><button class="'+(filtroMov==='pendientes'?'on':'')+'" onclick="filtroMov=\'pendientes\';render()">Pendientes'+(pend?' · '+pend:'')+'</button></div>';
   h += '<input id="q" class="search" type="search" placeholder="Buscar concepto o monto" value="'+esc(textoBusqueda)+'" aria-label="Buscar">';
+  h += panelFiltros();
   if (filtroMov==='pendientes') {
     var completos = transacciones.filter(function(t){ return esPendiente(t) && !faltaCat(t) && !t._sync; }).length;
     if (completos) h += '<button class="btn p w" onclick="confirmarCompletos()">Confirmar los '+completos+' que están completos</button>';
@@ -1095,6 +1098,58 @@ function htmlMovimientos(){
   h += '<div id="lista"></div>';
   setTimeout(renderLista,0);
   return h;
+}
+/* filtros de Movimientos: cuenta, rango de meses, tipo (gastos/ingresos) y rango de monto */
+function claveMes(f){ var d = parseF(f); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+function etiquetaMes(k){ var p = k.split('-'); return MESES_LARGO[Number(p[1])-1]+' '+p[0]; }
+function numFiltro(v){
+  var s = String(v==null?'':v).trim().replace(/\s/g,''); if (!s) return null;
+  if (s.indexOf(',') !== -1) s = s.replace(/\./g,'').replace(',','.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g,'');
+  var n = Number(s); return isNaN(n) ? null : Math.abs(n);
+}
+function filtrosActivos(){
+  return (filtros.cuenta?1:0) + (filtros.desde?1:0) + (filtros.hasta?1:0) + (filtros.tipo!=='todos'?1:0) + (numFiltro(filtros.min)!==null?1:0) + (numFiltro(filtros.max)!==null?1:0);
+}
+function pasaFiltros(t){
+  if (filtros.cuenta && t.cuenta !== filtros.cuenta) return false;
+  if (filtros.desde || filtros.hasta) { var k = claveMes(t.fecha); if (filtros.desde && k < filtros.desde) return false; if (filtros.hasta && k > filtros.hasta) return false; }
+  if (filtros.tipo === 'gastos' && !(t.monto < 0)) return false;
+  if (filtros.tipo === 'ingresos' && !(t.monto > 0)) return false;
+  var a = Math.abs(t.monto), mn = numFiltro(filtros.min), mx = numFiltro(filtros.max);
+  if (mn !== null && a < mn) return false;
+  if (mx !== null && a > mx) return false;
+  return true;
+}
+function etiquetaFiltros(){ var n = filtrosActivos(); return 'Filtros'+(n?' · '+n+' activo'+(n>1?'s':''):'')+' '+(filtrosAbiertos?'▲':'▼'); }
+function cambiarFiltro(k, v){ filtros[k] = v; limiteLista = 150; var b = document.getElementById('f-toggle'); if (b) b.textContent = etiquetaFiltros(); renderLista(); }
+function limpiarFiltros(){ filtros = { cuenta:'', desde:'', hasta:'', tipo:'todos', min:'', max:'' }; limiteLista = 150; render(); }
+function panelFiltros(){
+  var n = filtrosActivos();
+  var h = '<button id="f-toggle" class="btn w" aria-expanded="'+(filtrosAbiertos?'true':'false')+'" onclick="filtrosAbiertos=!filtrosAbiertos;render()">'+etiquetaFiltros()+'</button>';
+  if (!filtrosAbiertos) return h;
+  var cts = {}, meses = {};
+  transacciones.forEach(function(t){ if (t.cuenta) cts[t.cuenta] = true; meses[claveMes(t.fecha)] = true; });
+  var listaC = Object.keys(cts).sort(), listaM = Object.keys(meses).sort().reverse();
+  function optM(sel, vacio){ return '<option value="">'+vacio+'</option>' + listaM.map(function(k){ return '<option value="'+k+'"'+(sel===k?' selected':'')+'>'+etiquetaMes(k)+'</option>'; }).join(''); }
+  h += '<div class="card" style="gap:12px" id="panel-filtros">'
+    + '<div><span class="lbl">Cuenta</span><select id="f-cuenta" class="fld" onchange="cambiarFiltro(\'cuenta\',this.value)"><option value="">Todas las cuentas</option>'+listaC.map(function(c){ return '<option'+(filtros.cuenta===c?' selected':'')+'>'+esc(c)+'</option>'; }).join('')+'</select></div>'
+    + '<div class="two"><div><span class="lbl">Desde</span><select id="f-desde" class="fld" onchange="cambiarFiltro(\'desde\',this.value)">'+optM(filtros.desde,'Primer mes')+'</select></div>'
+    + '<div><span class="lbl">Hasta</span><select id="f-hasta" class="fld" onchange="cambiarFiltro(\'hasta\',this.value)">'+optM(filtros.hasta,'Último mes')+'</select></div></div>'
+    + '<div class="seg" role="tablist" aria-label="Tipo">'+[['todos','Todos'],['gastos','Gastos'],['ingresos','Ingresos']].map(function(x){ return '<button class="'+(filtros.tipo===x[0]?'on':'')+'" onclick="filtros.tipo=\''+x[0]+'\';limiteLista=150;render()">'+x[1]+'</button>'; }).join('')+'</div>'
+    + '<div><span class="lbl">Monto (sin signo, en la moneda de cada movimiento)</span><div class="two"><input id="f-min" class="fld" inputmode="decimal" placeholder="Mínimo" aria-label="Monto mínimo" value="'+esc(filtros.min)+'" oninput="cambiarFiltro(\'min\',this.value)"><input id="f-max" class="fld" inputmode="decimal" placeholder="Máximo" aria-label="Monto máximo" value="'+esc(filtros.max)+'" oninput="cambiarFiltro(\'max\',this.value)"></div></div>'
+    + (n ? '<button class="linkbtn" style="justify-content:center;width:100%" onclick="limpiarFiltros()">Limpiar filtros</button>' : '')
+    + '</div>';
+  return h;
+}
+function resumenFiltrado(xs){
+  var por = {}, orden = [];
+  xs.forEach(function(t){ var m = t.moneda || 'EUR'; if (!por[m]) { por[m] = { n:0, ent:0, sal:0 }; orden.push(m); } var o = por[m]; o.n++; if (t.monto >= 0) o.ent += t.monto; else o.sal += t.monto; });
+  var h = '<div class="card" id="resumen" style="gap:6px"><div class="eyebrow">'+xs.length+' movimiento'+(xs.length===1?'':'s')+'</div>';
+  orden.forEach(function(m){ var o = por[m];
+    h += '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;font-size:14px"><b>'+esc(m)+' · '+o.n+'</b><span class="num">Entra '+fmt(o.ent,m,true)+' · Sale '+fmt(o.sal,m)+' · <b>Neto '+fmt(o.ent+o.sal,m,true)+'</b></span></div>';
+  });
+  return h + '</div>';
 }
 function coincide(t, q){
   if (!q) return true;
@@ -1112,17 +1167,18 @@ function etiquetaDia(f){
 }
 function renderLista(){
   var el = document.getElementById('lista'); if (!el) return;
-  var xs = transacciones.filter(function(t){ return (filtroMov==='todos' || esPendiente(t)) && coincide(t, textoBusqueda); });
-  var total = xs.length; xs = xs.slice(0, 150);
-  if (!xs.length) { el.innerHTML = '<div class="list"><div class="empty">'+(filtroMov==='pendientes'?'No hay pendientes. ✓':'No hay movimientos que coincidan.')+'</div></div>'; return; }
-  var h = '', dia = null, abierto = false;
+  var xs = transacciones.filter(function(t){ return (filtroMov==='todos' || esPendiente(t)) && pasaFiltros(t) && coincide(t, textoBusqueda); });
+  var todos = xs, total = xs.length; xs = xs.slice(0, limiteLista);
+  var filtrando = filtrosActivos() > 0 || !!textoBusqueda;
+  if (!xs.length) { el.innerHTML = '<div class="list"><div class="empty">'+(filtroMov==='pendientes' && !filtrando?'No hay pendientes. ✓':'No hay movimientos que coincidan.')+'</div></div>'; return; }
+  var h = filtrando ? resumenFiltrado(todos) : '', dia = null, abierto = false;
   xs.forEach(function(t){
     var et = etiquetaDia(t.fecha);
     if (et !== dia) { if (abierto) h += '</div>'; h += '<div class="daylabel">'+esc(et)+'</div><div class="list">'; dia = et; abierto = true; }
     h += filaHtml(t);
   });
   if (abierto) h += '</div>';
-  if (total > xs.length) h += '<div class="empty">Mostrando '+xs.length+' de '+total+'. Usá la búsqueda para acotar.</div>';
+  if (total > xs.length) h += '<button class="btn w" onclick="limiteLista+=150;renderLista()">Mostrar más ('+xs.length+' de '+total+')</button>';
   el.innerHTML = h;
 }
 function filaHtml(t){
