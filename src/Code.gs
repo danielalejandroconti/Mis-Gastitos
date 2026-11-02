@@ -357,73 +357,84 @@ function eliminarDuplicadosExactos() {
 }
 
 // Reemplaza una transacción por 2 o más, repartiendo el mismo monto total entre ellas — para
-// separar, por ejemplo, una transferencia de la pareja que junta alquiler + compras, o un
-// resumen de tarjeta que en realidad son varios gastos distintos. Cada parte puede llevar su
-// propio concepto, categoría y subcategoría; fecha, cuenta, moneda y estado de validación se
-// heredan de la transacción original.
+// separar, por ejemplo, una transferencia de la pareja que junta alquiler + compras, o una
+// liquidación de tarjeta que en realidad son varios gastos distintos. Cada parte puede llevar su
+// propio concepto, categoría y subcategoría; fecha, cuenta, moneda, notas, estado de validación y
+// Conciliado se heredan de la transacción original. Grupo y Mi parte quedan vacíos.
+// Cada parte puede traer `id` (generado en el cliente, para que un reintento no duplique);
+// si ya existen filas con esos IDs, no se vuelve a dividir. Devuelve { ok, agregadas, ids }.
 function dividirTransaccion(id, partes) {
   if (!partes || partes.length < 2) {
     return { ok: false, error: 'Hacen falta al menos 2 partes para dividir.' };
   }
-  const sh = sheet_('Transacciones');
-  const values = sh.getDataRange().getValues();
-  const headers = values[0];
-  const idCol = headers.indexOf('ID');
-  const fechaCol = headers.indexOf('Fecha');
-  const monedaCol = headers.indexOf('Moneda');
-  const cuentaCol = headers.indexOf('Cuenta');
-  const origenCol = headers.indexOf('Origen');
-  const notasCol = headers.indexOf('Notas');
-  const montoCol = headers.indexOf('Monto');
-  const validadoCol = headers.indexOf('Validado');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = sheet_('Transacciones');
+    const values = sh.getDataRange().getValues();
+    const headers = values[0];
+    const col = (n) => headers.indexOf(n);
+    const idCol = col('ID');
 
-  let filaOriginal = -1;
-  for (let i = 1; i < values.length; i++) {
-    if (values[i][idCol] === id) { filaOriginal = i; break; }
+    // Idempotencia: si algún ID de parte ya está en la hoja, la división ya se hizo.
+    const idsPedidos = partes.map((p) => (p && p.id ? String(p.id) : '')).filter(Boolean);
+    if (idsPedidos.length) {
+      for (let i = 1; i < values.length; i++) {
+        if (idsPedidos.indexOf(String(values[i][idCol])) !== -1) {
+          return { ok: true, agregadas: 0, ids: idsPedidos, duplicado: true };
+        }
+      }
+    }
+
+    let filaOriginal = -1;
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][idCol]) === String(id)) { filaOriginal = i; break; }
+    }
+    if (filaOriginal === -1) return { ok: false, error: 'No se encontró esa transacción.' };
+    const orig = values[filaOriginal];
+    const val = (n) => (col(n) !== -1 ? orig[col(n)] : '');
+
+    const montoOriginal = Number(val('Monto')) || 0;
+    const sumaPartes = Math.round(partes.reduce((s, p) => s + (Number(p.monto) || 0), 0) * 100) / 100;
+    if (Math.abs(sumaPartes - Math.round(montoOriginal * 100) / 100) >= 0.01) {
+      return {
+        ok: false,
+        error: 'La suma de las partes (' + sumaPartes.toFixed(2) + ') no coincide con el monto original (' + montoOriginal.toFixed(2) + ').',
+      };
+    }
+
+    const origenOriginal = val('Origen');
+    const ids = [];
+    const nuevasFilas = partes.map((p) => {
+      const nuevoId = p.id ? String(p.id) : Utilities.getUuid();
+      ids.push(nuevoId);
+      const fila = headers.map(() => '');
+      const poner = (n, v) => { if (col(n) !== -1) fila[col(n)] = v; };
+      poner('ID', nuevoId);
+      poner('Fecha', val('Fecha'));
+      poner('Concepto', p.concepto || '');
+      poner('Monto', Number(p.monto) || 0);
+      poner('Moneda', val('Moneda'));
+      poner('Cuenta', val('Cuenta'));
+      poner('Categoría', p.categoria || '');
+      poner('Subcategoría', p.subcategoria || '');
+      poner('Origen', (origenOriginal ? origenOriginal + ':' : '') + 'dividido');
+      poner('Notas', val('Notas') || '');
+      poner('Validado', val('Validado'));
+      poner('Conciliado', val('Conciliado'));
+      return fila;
+    });
+
+    // Primero se agregan las partes y recién después se borra la original: si algo falla a mitad,
+    // no se pierde el movimiento.
+    const filaInicio = sh.getLastRow() + 1;
+    sh.getRange(filaInicio, 1, nuevasFilas.length, headers.length).setValues(nuevasFilas);
+    sh.deleteRow(filaOriginal + 1);
+    SpreadsheetApp.flush();
+    return { ok: true, agregadas: nuevasFilas.length, ids: ids };
+  } finally {
+    lock.releaseLock();
   }
-  if (filaOriginal === -1) return { ok: false, error: 'No se encontró esa transacción.' };
-
-  const montoOriginal = Number(values[filaOriginal][montoCol]) || 0;
-  const sumaPartes = Math.round(partes.reduce((s, p) => s + (Number(p.monto) || 0), 0) * 100) / 100;
-  if (Math.abs(sumaPartes - Math.round(montoOriginal * 100) / 100) >= 0.01) {
-    return {
-      ok: false,
-      error: 'La suma de las partes (' + sumaPartes.toFixed(2) + ') no coincide con el monto original (' + montoOriginal.toFixed(2) + ').',
-    };
-  }
-
-  const fechaOriginal = values[filaOriginal][fechaCol];
-  const monedaOriginal = values[filaOriginal][monedaCol];
-  const cuentaOriginal = values[filaOriginal][cuentaCol];
-  const origenOriginal = origenCol !== -1 ? values[filaOriginal][origenCol] : '';
-  const notasOriginal = notasCol !== -1 ? values[filaOriginal][notasCol] : '';
-  const validadoOriginal = validadoCol !== -1 ? values[filaOriginal][validadoCol] : '';
-
-  sh.deleteRow(filaOriginal + 1);
-
-  const nuevasFilas = partes.map((p) => [
-    Utilities.getUuid(),
-    fechaOriginal,
-    p.concepto || '',
-    Number(p.monto) || 0,
-    monedaOriginal,
-    cuentaOriginal,
-    p.categoria || '',
-    p.subcategoria || '',
-    (origenOriginal ? origenOriginal + ':' : '') + 'dividido',
-    notasOriginal || '',
-  ]);
-  const filaInicio = sh.getLastRow() + 1;
-  sh.getRange(filaInicio, 1, nuevasFilas.length, nuevasFilas[0].length).setValues(nuevasFilas);
-
-  // Las partes nuevas heredan el estado de validación de la original: si ya estaba validada, las
-  // partes también; si todavía estaba en el porlet "Sin validar", las partes siguen ahí.
-  if (validadoOriginal) {
-    const colValidado = columnaValidado_(sh);
-    sh.getRange(filaInicio, colValidado, nuevasFilas.length, 1).setValues(nuevasFilas.map(() => [validadoOriginal]));
-  }
-
-  return { ok: true, agregadas: nuevasFilas.length };
 }
 
 /* ============================ REGLAS ============================ */

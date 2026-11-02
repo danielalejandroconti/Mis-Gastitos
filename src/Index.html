@@ -944,6 +944,20 @@ function impQuitar(i){ imp.filas.splice(i, 1); imp.abiertas = {}; render(); }
 
 /* dividir un movimiento en varias partes (por ej. una transferencia que junta alquiler + súper) */
 var div = null;
+// Dividir sirve para dos casos: una fila del extracto antes de confirmar (div.i) o un movimiento ya
+// guardado en Transacciones (div.id, se abre desde Editar movimiento).
+function divBase(){
+  if (div.id) { var t = transacciones.filter(function(x){ return x.id===div.id; })[0]; return { monto:t.monto, moneda:t.moneda, concepto:t.concepto }; }
+  var r = imp.filas[div.i]; return { monto:r.monto, moneda:imp.moneda, concepto:r.concepto };
+}
+function abrirDividirMov(id){
+  var t = transacciones.filter(function(x){ return x.id===id; })[0]; if (!t) return;
+  if (t._sync) { toast('Espera a que termine de guardarse'); return; }
+  var mitad = Math.round(t.monto/2*100)/100;
+  cerrarSheet();
+  div = { id:id, i:-1, partes:[ { monto:mitad, concepto:t.concepto, categoria:t.categoria, subcategoria:t.subcategoria }, { monto:Math.round((t.monto-mitad)*100)/100, concepto:t.concepto, categoria:'', subcategoria:'' } ] };
+  pintarDividir();
+}
 function abrirDividir(i){
   var r = imp.filas[i], mitad = Math.round(r.monto/2*100)/100;
   div = { i:i, partes:[ { monto:mitad, concepto:r.concepto, categoria:r.categoria, subcategoria:r.subcategoria }, { monto:Math.round((r.monto-mitad)*100)/100, concepto:r.concepto, categoria:'', subcategoria:'' } ] };
@@ -956,17 +970,17 @@ function leerDividir(){
   });
 }
 function pintarDividir(){
-  var r = imp.filas[div.i];
+  var r = divBase();
   var suma = Math.round(div.partes.reduce(function(s,p){ return s + (Number(p.monto)||0); }, 0)*100)/100, objetivo = Math.round(r.monto*100)/100, ok = Math.abs(suma-objetivo) < 0.01;
   var h = '<div class="sheetbg" onclick="if(event.target===this)cerrarDividir()"><div class="sheet" role="dialog" aria-label="Dividir movimiento"><div class="hd"><h2 class="t">Dividir</h2><button class="x" aria-label="Cerrar" onclick="cerrarDividir()">'+ic('close',22)+'</button></div>'
-    + '<div class="muted" style="font-size:14px">Total del banco: <b class="num">'+fmt(r.monto,imp.moneda,true)+'</b>. Las partes tienen que sumar exactamente eso.</div>';
+    + '<div class="muted" style="font-size:14px">Total del '+(div.id?'movimiento':'banco')+': <b class="num">'+fmt(r.monto,r.moneda,true)+'</b>. Las partes tienen que sumar exactamente eso.</div>';
   div.partes.forEach(function(p, k){
     h += '<div class="card" style="gap:8px"><div class="two"><input class="fld" data-dp="'+k+'" data-k="monto" inputmode="decimal" aria-label="Monto" value="'+String(p.monto).replace('.',',')+'"><input class="fld" data-dp="'+k+'" data-k="concepto" aria-label="Concepto" value="'+esc(p.concepto)+'"></div>'
       + '<div class="two"><select class="fld" data-dp="'+k+'" data-k="categoria" aria-label="Categoría">'+opcionesCat(p.categoria)+'</select><select class="fld" data-dp="'+k+'" data-k="subcategoria" aria-label="Subcategoría">'+opcionesSub(p.categoria,p.subcategoria)+'</select></div>'
       + (div.partes.length>2 ? '<button class="linkbtn" onclick="leerDividir();div.partes.splice('+k+',1);pintarDividir()">Quitar esta parte</button>' : '')+'</div>';
   });
-  h += '<button class="btn" onclick="leerDividir();div.partes.push({monto:0,concepto:imp.filas[div.i].concepto,categoria:\'\',subcategoria:\'\'});pintarDividir()">+ Agregar parte</button>'
-    + '<div id="div-suma" class="'+(ok?'chip g':'err')+'" style="align-self:flex-start">Suma '+fmt(suma,imp.moneda)+' de '+fmt(objetivo,imp.moneda)+(ok?' ✓':'')+'</div>'
+  h += '<button class="btn" onclick="leerDividir();div.partes.push({monto:0,concepto:divBase().concepto,categoria:\'\',subcategoria:\'\'});pintarDividir()">+ Agregar parte</button>'
+    + '<div id="div-suma" class="'+(ok?'chip g':'err')+'" style="align-self:flex-start">Suma '+fmt(suma,r.moneda)+' de '+fmt(objetivo,r.moneda)+(ok?' ✓':'')+'</div>'
     + '<button id="div-ok" class="btn p" style="height:52px" '+(ok?'':'disabled ')+'onclick="guardarDividir()">Dividir</button></div></div>';
   document.getElementById('overlay').innerHTML = h;
   document.querySelectorAll('[data-dp]').forEach(function(el){
@@ -978,15 +992,16 @@ function pintarDividir(){
   });
 }
 function actualizarSumaDividir(){
-  var r = imp.filas[div.i];
+  var r = divBase();
   var suma = Math.round(div.partes.reduce(function(s,p){ return s + (Number(p.monto)||0); }, 0)*100)/100, objetivo = Math.round(r.monto*100)/100, ok = Math.abs(suma-objetivo) < 0.01;
   var c = document.getElementById('div-suma'), b = document.getElementById('div-ok');
-  if (c) { c.className = ok ? 'chip g' : 'err'; c.textContent = 'Suma '+fmt(suma,imp.moneda)+' de '+fmt(objetivo,imp.moneda)+(ok?' ✓':''); }
+  if (c) { c.className = ok ? 'chip g' : 'err'; c.textContent = 'Suma '+fmt(suma,r.moneda)+' de '+fmt(objetivo,r.moneda)+(ok?' ✓':''); }
   if (b) b.disabled = !ok;
 }
 function cerrarDividir(){ div = null; document.getElementById('overlay').innerHTML = ''; }
 function guardarDividir(){
   leerDividir();
+  if (div.id) { guardarDividirMov(); return; }
   var r = imp.filas[div.i];
   var suma = Math.round(div.partes.reduce(function(s,p){ return s + (Number(p.monto)||0); }, 0)*100)/100;
   if (Math.abs(suma - Math.round(r.monto*100)/100) >= 0.01) { pintarDividir(); toast('Las partes no suman el total'); return; }
@@ -994,6 +1009,31 @@ function guardarDividir(){
   var nuevas = div.partes.map(function(p){ return { fecha:r.fecha, concepto:p.concepto, monto:p.monto, categoria:p.categoria, subcategoria:p.subcategoria, auto:false, candidatos:[], fusionarCon:'', recordarRegla:false, _orig:{ c:p.categoria, s:p.subcategoria, a:false } }; });
   imp.filas.splice.apply(imp.filas, [div.i, 1].concat(nuevas));
   imp.abiertas = {}; cerrarDividir(); render();
+}
+
+function guardarDividirMov(){
+  var t = transacciones.filter(function(x){ return x.id===div.id; })[0]; if (!t) return;
+  var suma = Math.round(div.partes.reduce(function(s,p){ return s + (Number(p.monto)||0); }, 0)*100)/100;
+  if (Math.abs(suma - Math.round(t.monto*100)/100) >= 0.01) { pintarDividir(); toast('Las partes no suman el total'); return; }
+  if (div.partes.some(function(p){ return !String(p.concepto).trim(); })) { toast('Poné un concepto en cada parte'); return; }
+  var partes = div.partes.map(function(p){ return { id:uuid(), concepto:String(p.concepto).trim(), monto:Number(p.monto)||0, categoria:p.categoria||'', subcategoria:p.subcategoria||'' }; });
+  var nuevas = partes.map(function(p){ return { id:p.id, fecha:t.fecha, concepto:p.concepto, monto:p.monto, moneda:t.moneda, cuenta:t.cuenta, categoria:p.categoria, subcategoria:p.subcategoria, origen:(t.origen ? t.origen+':' : '')+'dividido', notas:t.notas||'', validado:t.validado, grupo:'', miParte:null, conciliado:t.conciliado||'', _sync:'enviando' }; });
+  var ordenar = function(){ transacciones.sort(function(a,b){ return parseF(b.fecha)-parseF(a.fecha); }); };
+  transacciones.splice(transacciones.indexOf(t), 1);
+  nuevas.forEach(function(n){ transacciones.push(n); });
+  ordenar(); cerrarDividir(); render();
+  function volver(msg){
+    var ids = {}; nuevas.forEach(function(n){ ids[n.id] = true; });
+    transacciones = transacciones.filter(function(x){ return !ids[x.id]; });
+    transacciones.push(t); ordenar(); toast(msg); render();
+  }
+  google.script.run.withFailureHandler(function(){ volver('No se pudo dividir'); })
+    .withSuccessHandler(function(r){
+      if (r && r.ok === false) { volver(r.error || 'No se pudo dividir'); return; }
+      nuevas.forEach(function(n){ delete n._sync; });
+      setSync('ok'); render(); toast('Dividido en '+nuevas.length+' partes');
+    })
+    .dividirTransaccion(t.id, partes);
 }
 
 function confirmarExtracto(){
@@ -1197,7 +1237,8 @@ function pintarEditar(){
     + '</div>'
     + (edit.borrar
         ? '<div class="err" role="alert" style="display:flex;flex-direction:column;gap:8px">¿Eliminar "'+esc(t.concepto)+'" ('+fmt(t.monto,t.moneda,true)+')? Se borra del Sheet y no se puede deshacer.<div style="display:flex;gap:10px"><button class="btn" style="flex:1;background:var(--amber);border-color:var(--amber);color:#fff" onclick="eliminarMovimiento()">Sí, eliminar</button><button class="btn" style="flex:1" onclick="edit.borrar=false;pintarEditar()">Cancelar</button></div></div>'
-        : '<button class="linkbtn" style="color:var(--amber);justify-content:center;width:100%" onclick="edit.borrar=true;pintarEditar()">Eliminar movimiento</button>')
+        : '<button class="linkbtn" style="justify-content:center;width:100%" onclick="abrirDividirMov(\''+t.id+'\')">Dividir en varias partes</button>'
+          + '<button class="linkbtn" style="color:var(--amber);justify-content:center;width:100%" onclick="edit.borrar=true;pintarEditar()">Eliminar movimiento</button>')
     + '</div></div>';
   document.getElementById('overlay').innerHTML = h;
   document.getElementById('e-fecha').addEventListener('change', function(e){ edit.fecha=e.target.value; });
